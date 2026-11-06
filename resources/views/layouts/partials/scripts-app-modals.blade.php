@@ -89,7 +89,7 @@
                         displayConcerts(data, city, latitude, longitude);
                     })
                     .catch(error => {
-                        console.error('âŒ Error loading concerts:', error);
+                        console.error('Ã¢ÂÅ’ Error loading concerts:', error);
 
                         // Clear container first
                         const container = document.getElementById('concerts-container');
@@ -115,7 +115,7 @@
                         hideConcertsLoading();
                     });
             } catch (error) {
-                console.error('âŒ Critical error in loadConcerts:', error);
+                console.error('Ã¢ÂÅ’ Critical error in loadConcerts:', error);
                 hideConcertsLoading();
                 displayFallbackConcerts();
             }
@@ -245,7 +245,7 @@
             if (loadingElement) {
                 loadingElement.style.display = 'block';
             } else {
-                console.error('âŒ Loading element not found');
+                console.error('Ã¢ÂÅ’ Loading element not found');
             }
         }
 
@@ -255,7 +255,7 @@
             if (loadingElement) {
                 loadingElement.style.display = 'none';
             } else {
-                console.error('âŒ Loading element not found');
+                console.error('Ã¢ÂÅ’ Loading element not found');
             }
         }
 
@@ -462,11 +462,11 @@
                     }
                 @endphp
                 <!-- Hidden audio element -->
-                <audio id="live-audio" preload="none" src="{{ $streamUrl }}" hx-preserve="true"
+                <audio id="live-audio" preload="auto" src="{{ $streamUrl }}" hx-preserve="true"
                     style="position: fixed; bottom: 0; left: 0; width: 1px; height: 1px; opacity: 0.01; pointer-events: none; z-index: -1;" playsinline
                     webkit-playsinline x-webkit-airplay="allow" data-title=""
                     data-artist="" data-stream-url="{{ $streamUrl }}">
-                    <source src="{{ $streamUrl }}" type="audio/mpeg">
+                    
                     Your browser does not support the audio element.
                 </audio>
 
@@ -823,4 +823,5 @@
             }
         });
     </script>
+
 

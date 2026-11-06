@@ -26,12 +26,22 @@
     window._currentArtworkUrl = _defaultSrc;
     window._currentTitleText = '';
     window._currentArtistText = '';
+    window._currentSongDuration = 0;
+    window._songStartedAt = Date.now();
     window._metadataReady = false;
     window._metadataInFlight = false;
-    window._artworkCache = {};
+    window._adPollConfirmCount = 0;
+    window._itunesCache = {};
 
     function getAlbumTitle() {
-        return stationSlogan ? (_appName + ' - ' + stationSlogan) : _appName;
+        return stationSlogan ? (_appName + ' • ' + stationSlogan) : (_appName + ' Live Radio');
+    }
+
+    function formatMinutesSeconds(sec) {
+        if (!sec || !isFinite(sec) || sec <= 0) return '';
+        var m = Math.floor(sec / 60);
+        var s = Math.floor(sec % 60);
+        return m + ':' + (s < 10 ? '0' : '') + s;
     }
 
     function buildArtworkObjects(srcUrl) {
@@ -76,40 +86,65 @@
         timeoutMs = timeoutMs || 3500;
         return new Promise(function(resolve) {
             if (!url || url === _defaultSrc) {
-                resolve({ url: _defaultSrc, loaded: true });
+                resolve(_defaultSrc);
                 return;
             }
             var done = false;
-            var finish = function(finalUrl, ok) {
+            var finish = function(finalUrl) {
                 if (done) return;
                 done = true;
-                resolve({ url: finalUrl, loaded: ok });
+                resolve(finalUrl);
             };
-            var timer = setTimeout(function() { finish(_defaultSrc, false); }, timeoutMs);
+            var timer = setTimeout(function() { finish(url); }, timeoutMs);
             var img = new Image();
             img.onload = function() {
                 clearTimeout(timer);
-                finish(url, true);
+                finish(url);
             };
             img.onerror = function() {
                 clearTimeout(timer);
-                finish(_defaultSrc, false);
+                finish(_defaultSrc);
             };
             img.src = url;
         });
     }
 
-    // Keep Android / iOS Lock Screen & Notification Shade MediaSession 100% Persistent (Playing AND Paused)
+    // Update Lock Screen Progress Bar (Song Length & Elapsed Time)
+    window.syncLockScreenPosition = function() {
+        if (!('mediaSession' in navigator) || typeof navigator.mediaSession.setPositionState !== 'function') return;
+        try {
+            var dur = Number(window._currentSongDuration) || 0;
+            if (dur > 0) {
+                var elapsed = Math.max(0, (Date.now() - (window._songStartedAt || Date.now())) / 1000);
+                var pos = Math.min(elapsed, Math.max(0, dur - 0.5));
+                navigator.mediaSession.setPositionState({
+                    duration: dur,
+                    playbackRate: 1.0,
+                    position: pos
+                });
+            }
+        } catch (e) {}
+    };
+
+    // Professional Lock Screen / Notification Bar Controller
     window.reassertMediaSessionMetadata = function() {
         if (!('mediaSession' in navigator)) return;
         try {
-            var titleText = window._currentTitleText || _appName;
-            var artistText = window._currentArtistText || (stationSlogan || 'Live Radio');
+            var rawTitle = window._currentTitleText || _appName;
+            var rawArtist = window._currentArtistText || (stationSlogan || 'Live Country');
+            var durStr = formatMinutesSeconds(window._currentSongDuration);
+
+            // Show song length badge & LIVE station branding on Lock Screen
+            var lockTitle = durStr ? (rawTitle + ' (' + durStr + ')') : rawTitle;
+            var lockArtist = (rawArtist.indexOf(_appName) === -1)
+                ? (rawArtist + ' • 🔴 ' + _appName + ' LIVE')
+                : rawArtist;
+
             var artUrl = window._currentArtworkUrl || _defaultAbsoluteSrc;
 
             navigator.mediaSession.metadata = new MediaMetadata({
-                title: titleText,
-                artist: artistText,
+                title: lockTitle,
+                artist: lockArtist,
                 album: getAlbumTitle(),
                 artwork: buildArtworkObjects(artUrl)
             });
@@ -119,8 +154,10 @@
             }
 
             var audio = (typeof RadioAudio !== 'undefined') ? RadioAudio.get() : document.getElementById('live-audio');
-            var isPlaying = (audio && !audio.paused && !audio.error && audio.readyState >= 2 && !window.userPaused);
+            var isPlaying = (audio && !audio.paused && !audio.error && !window.userPaused);
             navigator.mediaSession.playbackState = isPlaying ? 'playing' : 'paused';
+
+            window.syncLockScreenPosition();
         } catch (e) {}
     };
 
@@ -156,59 +193,103 @@
             .trim();
     }
 
-    async function resolveArtworkFromItunes(artist, title) {
+    function getPrimaryArtist(artistStr) {
+        if (!artistStr) return '';
+        var primary = String(artistStr).split(/\s*(?:&|\band\b|\bfeat\.?|\bft\.?|\bwith\b|,|\/|\bx\b)\s*/i)[0];
+        return cleanSearchTerm(primary);
+    }
+
+    async function fetchItunesJson(query, entity) {
+        entity = entity || 'song';
+        // 1. Direct Browser -> Apple iTunes API (Fastest, zero server IP rate-limit)
+        try {
+            var directUrl = 'https://itunes.apple.com/search?term=' + encodeURIComponent(query) + '&media=music&entity=' + entity + '&limit=10&country=US';
+            var res = await fetch(directUrl, { method: 'GET', headers: { 'Accept': 'application/json' } });
+            if (res.ok) {
+                var data = await res.json();
+                if (data && Array.isArray(data.results) && data.results.length > 0) return data;
+            }
+        } catch (e) {}
+
+        // 2. Fallback -> Server Proxy
+        try {
+            var proxyUrl = '/proxy/itunes-search?term=' + encodeURIComponent(query);
+            var res2 = await fetch(proxyUrl, { method: 'GET', headers: { 'Accept': 'application/json' } });
+            if (res2.ok) {
+                var data2 = await res2.json();
+                if (data2 && Array.isArray(data2.results) && data2.results.length > 0) return data2;
+            }
+        } catch (e) {}
+
+        return null;
+    }
+
+    // 4-Layer Artwork + Exact Song Duration Resolver
+    async function resolveTrackInfoFromItunes(artist, title) {
         var cacheKey = (artist + '___' + title).toLowerCase();
-        if (window._artworkCache[cacheKey]) {
-            return window._artworkCache[cacheKey];
+        if (window._itunesCache[cacheKey]) {
+            return window._itunesCache[cacheKey];
         }
 
         var cleanTitle = cleanSearchTerm(title);
         var cleanArtist = cleanSearchTerm(artist);
-        if (!cleanTitle || cleanTitle.length < 2) return _defaultSrc;
+        var primaryArtist = getPrimaryArtist(artist);
 
         var queries = [];
-        if (cleanArtist && cleanArtist.length >= 2) {
-            queries.push(cleanArtist + ' ' + cleanTitle);
-        }
-        queries.push(cleanTitle);
+        if (primaryArtist && cleanTitle) queries.push(primaryArtist + ' ' + cleanTitle);
+        if (cleanArtist && cleanArtist !== primaryArtist && cleanTitle) queries.push(cleanArtist + ' ' + cleanTitle);
+        if (cleanTitle && cleanTitle.length >= 2) queries.push(cleanTitle);
 
         for (var i = 0; i < queries.length; i++) {
-            var q = queries[i];
-            try {
-                var res = await fetch('/proxy/itunes-search?term=' + encodeURIComponent(q), {
-                    method: 'GET',
-                    headers: { 'Accept': 'application/json' },
-                    cache: 'force-cache'
-                });
-                if (!res.ok) continue;
-                var data = await res.json();
-                if (data && Array.isArray(data.results) && data.results.length > 0) {
-                    var normArtist = cleanArtist.toLowerCase();
-                    var normTitle = cleanTitle.toLowerCase();
+            var data = await fetchItunesJson(queries[i], 'song');
+            if (data && data.results && data.results.length > 0) {
+                var normTitle = cleanTitle.toLowerCase();
+                var normPrimary = primaryArtist.toLowerCase();
 
-                    var best = data.results.find(function(r) {
-                        return r.artworkUrl100 &&
-                            r.trackName && r.artistName &&
-                            r.trackName.toLowerCase().includes(normTitle) &&
-                            (normArtist ? r.artistName.toLowerCase().includes(normArtist.split(' ')[0]) : true);
+                var best = data.results.find(function(r) {
+                    return r.artworkUrl100 && r.trackName && r.artistName &&
+                        (r.trackName.toLowerCase().includes(normTitle) || normTitle.includes(r.trackName.toLowerCase())) &&
+                        (normPrimary ? r.artistName.toLowerCase().includes(normPrimary.split(' ')[0]) : true);
+                });
+
+                if (!best && normPrimary) {
+                    best = data.results.find(function(r) {
+                        return r.artworkUrl100 && r.artistName && r.artistName.toLowerCase().includes(normPrimary.split(' ')[0]);
                     });
-                    if (!best) {
-                        best = data.results.find(function(r) {
-                            return r.artworkUrl100 && r.trackName && r.trackName.toLowerCase().includes(normTitle);
-                        });
-                    }
-                    if (!best) {
-                        best = data.results.find(function(r) { return r.artworkUrl100; });
-                    }
-                    if (best && best.artworkUrl100) {
-                        var hiRes = best.artworkUrl100.replace(/\b\d{2,4}x\d{2,4}bb\b/, '512x512bb');
-                        window._artworkCache[cacheKey] = hiRes;
-                        return hiRes;
-                    }
                 }
-            } catch (e) {}
+
+                if (!best) {
+                    best = data.results.find(function(r) { return r.artworkUrl100; });
+                }
+
+                if (best && best.artworkUrl100) {
+                    var resultObj = {
+                        artwork: best.artworkUrl100.replace(/\b\d{2,4}x\d{2,4}bb\b/, '512x512bb'),
+                        duration: best.trackTimeMillis ? Math.round(best.trackTimeMillis / 1000) : 210
+                    };
+                    window._itunesCache[cacheKey] = resultObj;
+                    return resultObj;
+                }
+            }
         }
-        return _defaultSrc;
+
+        // Layer 4: If track is a brand-new radio single not yet indexed by song title, fetch the Singer's Album Cover!
+        if (primaryArtist && primaryArtist.length >= 2) {
+            var artistData = await fetchItunesJson(primaryArtist, 'album');
+            if (artistData && artistData.results && artistData.results.length > 0) {
+                var albumBest = artistData.results.find(function(r) { return r.artworkUrl100; });
+                if (albumBest && albumBest.artworkUrl100) {
+                    var fallbackObj = {
+                        artwork: albumBest.artworkUrl100.replace(/\b\d{2,4}x\d{2,4}bb\b/, '512x512bb'),
+                        duration: 210
+                    };
+                    window._itunesCache[cacheKey] = fallbackObj;
+                    return fallbackObj;
+                }
+            }
+        }
+
+        return { artwork: _defaultSrc, duration: 0 };
     }
 
     async function applyIncomingMetadata(rawArtist, rawTitle, providedArtwork) {
@@ -221,18 +302,28 @@
 
         var artistEl = document.getElementById('current-artist');
         var titleEl  = document.getElementById('current-title');
+        var songInfo = document.querySelector('.player-song');
+        var playText = document.getElementById('play-to-listen-text');
         if (!artistEl || !titleEl) return;
 
         var cleanTitle = String(rawTitle || '').replace(/\s*[0-9]{1,2}[:.][0-9]{2}(?:[:.][0-9]{2})?\s*$/, '').replace(/[\s\-\–\—\|•:]+$/, '').trim();
         var cleanArtist = String(rawArtist || '').replace(/[\s\-\–\—\|•:]+$/, '').trim();
 
-        // Advertisement / Station Break Handling
+        // Advertisement / Station Break Check (require 2 consecutive polls if a valid song is already showing)
         if (isAdvertisementOrStationBreak(cleanTitle, cleanArtist)) {
-            var adKey = 'AD_BREAK_STATE';
-            window._currentTrackKey = adKey;
+            if (window._currentTrackKey && window._currentTrackKey !== 'AD_BREAK_STATE') {
+                window._adPollConfirmCount = (window._adPollConfirmCount || 0) + 1;
+                if (window._adPollConfirmCount < 2) return;
+            }
+            window._adPollConfirmCount = 0;
+            if (window._currentTrackKey === 'AD_BREAK_STATE') return;
+
+            window._currentTrackKey = 'AD_BREAK_STATE';
             window._currentArtworkUrl = _defaultSrc;
             window._currentTitleText = 'ADVERTISEMENT / STATION BREAK';
             window._currentArtistText = _appName + (stationSlogan ? ' — ' + stationSlogan : '');
+            window._currentSongDuration = 60;
+            window._songStartedAt = Date.now();
             window._metadataReady = true;
 
             window.setStickyPlayerArtwork(_defaultSrc);
@@ -240,28 +331,25 @@
             artistEl.textContent = window._currentArtistText;
             document.title = _appName + ' | Live Radio';
 
+            if (window._currentPlayerState === (window.PLAYER_STATE && window.PLAYER_STATE.PLAYING)) {
+                if (songInfo) songInfo.style.display = 'block';
+                if (playText) playText.style.display = 'none';
+            }
             window.reassertMediaSessionMetadata();
-            if (typeof window.checkAndReleasePlaybackGate === 'function') {
-                window.checkAndReleasePlaybackGate();
-            }
             return;
         }
 
+        window._adPollConfirmCount = 0;
         var trackKey = (cleanArtist + '___' + cleanTitle).toLowerCase();
+
         if (window._currentTrackKey === trackKey && window._metadataReady) {
-            // Reassert lockscreen state and release gate if waiting
-            if (typeof window.checkAndReleasePlaybackGate === 'function') {
-                window.checkAndReleasePlaybackGate();
-            }
+            window.syncLockScreenPosition();
             return;
         }
 
-        var targetArtUrl = (providedArtwork && String(providedArtwork).startsWith('http')) ? providedArtwork : null;
-        if (!targetArtUrl) {
-            targetArtUrl = await resolveArtworkFromItunes(cleanArtist, cleanTitle);
-        }
-
-        var preloadResult = await preloadImageWithTimeout(targetArtUrl, 3500);
+        var infoResult = await resolveTrackInfoFromItunes(cleanArtist, cleanTitle);
+        var targetArtUrl = (providedArtwork && String(providedArtwork).startsWith('http')) ? providedArtwork : infoResult.artwork;
+        var readyArtUrl = await preloadImageWithTimeout(targetArtUrl, 3500);
 
         if ((typeof navigator.onLine !== 'undefined' && !navigator.onLine) || window._networkIssueDetected) {
             window.resetArtworkToStationLogo();
@@ -269,25 +357,27 @@
             return;
         }
 
-        // Commit Title + Artist + Preloaded Photo atomically at the exact same millisecond!
+        // Atomic 0.0s Commit: Photo + Title + Artist + Song Duration all update at the exact same instant!
         window._currentTrackKey = trackKey;
-        window._currentArtworkUrl = preloadResult.url;
+        window._currentArtworkUrl = readyArtUrl;
         window._currentTitleText = cleanTitle;
         window._currentArtistText = cleanArtist || _appName;
+        window._currentSongDuration = infoResult.duration || 210;
+        window._songStartedAt = Date.now();
         window._metadataReady = true;
 
-        window.setStickyPlayerArtwork(preloadResult.url);
-        titleEl.textContent = window._currentTitleText;
-        artistEl.textContent = window._currentArtistText;
-        document.title = window._currentTitleText + ' - ' + window._currentArtistText + ' | ' + _appName;
+        var durBadge = formatMinutesSeconds(window._currentSongDuration);
+        window.setStickyPlayerArtwork(readyArtUrl);
+        titleEl.textContent = cleanTitle;
+        artistEl.textContent = (cleanArtist || _appName) + (durBadge ? '  •  ' + durBadge : '');
+        document.title = cleanTitle + ' - ' + (cleanArtist || _appName) + ' | ' + _appName;
 
-        // Always update Lock Screen / Notification bar (even when Paused!)
-        window.reassertMediaSessionMetadata();
-
-        // Notify audio engine that matching Song + Photo are ready so playback can unmute/start together
-        if (typeof window.checkAndReleasePlaybackGate === 'function') {
-            window.checkAndReleasePlaybackGate();
+        if (window._currentPlayerState === (window.PLAYER_STATE && window.PLAYER_STATE.PLAYING)) {
+            if (songInfo) songInfo.style.display = 'block';
+            if (playText) playText.style.display = 'none';
         }
+
+        window.reassertMediaSessionMetadata();
     }
 
     window.updateSongInfo = function(info) {
@@ -325,11 +415,8 @@
 
         window._metadataInFlight = true;
         try {
-            var controller = (typeof AbortController !== 'undefined') ? new AbortController() : null;
-            var timeoutId = controller ? setTimeout(function() { controller.abort(); }, 4500) : null;
-
             var streamUrl = window.DEFAULT_STREAM_URL || 'https://streams.radiomast.io/rc101';
-            var fetchOpts = {
+            var res = await fetch('/api/stream-metadata?streamUrl=' + encodeURIComponent(streamUrl) + '&_t=' + Date.now(), {
                 method: 'GET',
                 headers: {
                     'Accept': 'application/json',
@@ -337,11 +424,7 @@
                     'X-Requested-With': 'XMLHttpRequest'
                 },
                 cache: 'no-store'
-            };
-            if (controller) fetchOpts.signal = controller.signal;
-
-            var res = await fetch('/api/stream-metadata?streamUrl=' + encodeURIComponent(streamUrl) + '&_t=' + Date.now(), fetchOpts);
-            if (timeoutId) clearTimeout(timeoutId);
+            });
 
             if (res.ok) {
                 var data = await res.json();
@@ -350,7 +433,6 @@
                 }
             }
         } catch (e) {
-            // Transient timeout or network blip
         } finally {
             window._metadataInFlight = false;
         }
@@ -367,7 +449,12 @@
         window.setStickyPlayerArtwork(_defaultSrc);
         pollLiveMetadata();
 
-        // Poll every 5 seconds (lightweight on mobile bandwidth so background audio NEVER stutters!)
-        setInterval(pollLiveMetadata, 5000);
+        // Poll metadata every 6 seconds and update lock screen progress bar smoothly
+        setInterval(pollLiveMetadata, 6000);
+        setInterval(function() {
+            if (window._currentPlayerState === (window.PLAYER_STATE && window.PLAYER_STATE.PLAYING)) {
+                window.syncLockScreenPosition();
+            }
+        }, 2000);
     });
 </script>
