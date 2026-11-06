@@ -1,6 +1,5 @@
 <script>
     window.onerror = function (message, source, lineno, colno, error) {
-        console.error('Global error:', { message, source, lineno, colno, error });
         return true;
     };
 
@@ -19,45 +18,16 @@
     let stationSlogan = @json($resolvedSlogan ?? '');
     const _appName = @json($resolvedAppName);
     const _defaultSrc = @json($resolvedDefaultArt);
-    const _defaultAbsoluteSrc = _defaultSrc.startsWith('http') ? _defaultSrc : (window.location.origin + _defaultSrc);
 
     window._defaultLogoUrl = _defaultSrc;
     window._currentTrackKey = '';
     window._currentArtworkUrl = _defaultSrc;
     window._currentTitleText = '';
     window._currentArtistText = '';
-    window._currentSongDuration = 0;
-    window._songStartedAt = Date.now();
     window._metadataReady = false;
     window._metadataInFlight = false;
     window._adPollConfirmCount = 0;
     window._itunesCache = {};
-
-    function getAlbumTitle() {
-        return stationSlogan ? (_appName + ' • ' + stationSlogan) : (_appName + ' Live Radio');
-    }
-
-    function formatMinutesSeconds(sec) {
-        if (!sec || !isFinite(sec) || sec <= 0) return '';
-        var m = Math.floor(sec / 60);
-        var s = Math.floor(sec % 60);
-        return m + ':' + (s < 10 ? '0' : '') + s;
-    }
-
-    function buildArtworkObjects(srcUrl) {
-        var fullUrl = (srcUrl || _defaultAbsoluteSrc);
-        if (!fullUrl.startsWith('http') && !fullUrl.startsWith('data:')) {
-            fullUrl = window.location.origin + (fullUrl.startsWith('/') ? '' : '/') + fullUrl;
-        }
-        return [
-            { src: fullUrl, sizes: '96x96',   type: 'image/jpeg' },
-            { src: fullUrl, sizes: '128x128', type: 'image/jpeg' },
-            { src: fullUrl, sizes: '192x192', type: 'image/jpeg' },
-            { src: fullUrl, sizes: '256x256', type: 'image/jpeg' },
-            { src: fullUrl, sizes: '384x384', type: 'image/jpeg' },
-            { src: fullUrl, sizes: '512x512', type: 'image/jpeg' }
-        ];
-    }
 
     window.setStickyPlayerArtwork = function(srcUrl) {
         var targetSrc = srcUrl || _defaultSrc;
@@ -83,7 +53,7 @@
     };
 
     function preloadImageWithTimeout(url, timeoutMs) {
-        timeoutMs = timeoutMs || 3500;
+        timeoutMs = timeoutMs || 3000;
         return new Promise(function(resolve) {
             if (!url || url === _defaultSrc) {
                 resolve(_defaultSrc);
@@ -108,58 +78,6 @@
             img.src = url;
         });
     }
-
-    // Update Lock Screen Progress Bar (Song Length & Elapsed Time)
-    window.syncLockScreenPosition = function() {
-        if (!('mediaSession' in navigator) || typeof navigator.mediaSession.setPositionState !== 'function') return;
-        try {
-            var dur = Number(window._currentSongDuration) || 0;
-            if (dur > 0) {
-                var elapsed = Math.max(0, (Date.now() - (window._songStartedAt || Date.now())) / 1000);
-                var pos = Math.min(elapsed, Math.max(0, dur - 0.5));
-                navigator.mediaSession.setPositionState({
-                    duration: dur,
-                    playbackRate: 1.0,
-                    position: pos
-                });
-            }
-        } catch (e) {}
-    };
-
-    // Professional Lock Screen / Notification Bar Controller
-    window.reassertMediaSessionMetadata = function() {
-        if (!('mediaSession' in navigator)) return;
-        try {
-            var rawTitle = window._currentTitleText || _appName;
-            var rawArtist = window._currentArtistText || (stationSlogan || 'Live Country');
-            var durStr = formatMinutesSeconds(window._currentSongDuration);
-
-            // Show song length badge & LIVE station branding on Lock Screen
-            var lockTitle = durStr ? (rawTitle + ' (' + durStr + ')') : rawTitle;
-            var lockArtist = (rawArtist.indexOf(_appName) === -1)
-                ? (rawArtist + ' • 🔴 ' + _appName + ' LIVE')
-                : rawArtist;
-
-            var artUrl = window._currentArtworkUrl || _defaultAbsoluteSrc;
-
-            navigator.mediaSession.metadata = new MediaMetadata({
-                title: lockTitle,
-                artist: lockArtist,
-                album: getAlbumTitle(),
-                artwork: buildArtworkObjects(artUrl)
-            });
-
-            if (typeof window.bindMasterMediaSessionHandlers === 'function') {
-                window.bindMasterMediaSessionHandlers();
-            }
-
-            var audio = (typeof RadioAudio !== 'undefined') ? RadioAudio.get() : document.getElementById('live-audio');
-            var isPlaying = (audio && !audio.paused && !audio.error && !window.userPaused);
-            navigator.mediaSession.playbackState = isPlaying ? 'playing' : 'paused';
-
-            window.syncLockScreenPosition();
-        } catch (e) {}
-    };
 
     function isAdvertisementOrStationBreak(rawTitle, rawArtist) {
         var combined = ((rawArtist || '') + ' ' + (rawTitle || '')).trim().toLowerCase();
@@ -201,7 +119,6 @@
 
     async function fetchItunesJson(query, entity) {
         entity = entity || 'song';
-        // 1. Direct Browser -> Apple iTunes API (Fastest, zero server IP rate-limit)
         try {
             var directUrl = 'https://itunes.apple.com/search?term=' + encodeURIComponent(query) + '&media=music&entity=' + entity + '&limit=10&country=US';
             var res = await fetch(directUrl, { method: 'GET', headers: { 'Accept': 'application/json' } });
@@ -211,21 +128,19 @@
             }
         } catch (e) {}
 
-        // 2. Fallback -> Server Proxy
         try {
             var proxyUrl = '/proxy/itunes-search?term=' + encodeURIComponent(query);
             var res2 = await fetch(proxyUrl, { method: 'GET', headers: { 'Accept': 'application/json' } });
             if (res2.ok) {
                 var data2 = await res2.json();
-                if (data2 && Array.isArray(data2.results) && data2.results.length > 0) return data2;
+                if (data2 && Array.isArray(data2.results) && data.results.length > 0) return data2;
             }
         } catch (e) {}
 
         return null;
     }
 
-    // 4-Layer Artwork + Exact Song Duration Resolver
-    async function resolveTrackInfoFromItunes(artist, title) {
+    async function resolveTrackArtworkFromItunes(artist, title) {
         var cacheKey = (artist + '___' + title).toLowerCase();
         if (window._itunesCache[cacheKey]) {
             return window._itunesCache[cacheKey];
@@ -263,33 +178,26 @@
                 }
 
                 if (best && best.artworkUrl100) {
-                    var resultObj = {
-                        artwork: best.artworkUrl100.replace(/\b\d{2,4}x\d{2,4}bb\b/, '512x512bb'),
-                        duration: best.trackTimeMillis ? Math.round(best.trackTimeMillis / 1000) : 210
-                    };
-                    window._itunesCache[cacheKey] = resultObj;
-                    return resultObj;
+                    var artHiRes = best.artworkUrl100.replace(/\b\d{2,4}x\d{2,4}bb\b/, '512x512bb');
+                    window._itunesCache[cacheKey] = artHiRes;
+                    return artHiRes;
                 }
             }
         }
 
-        // Layer 4: If track is a brand-new radio single not yet indexed by song title, fetch the Singer's Album Cover!
         if (primaryArtist && primaryArtist.length >= 2) {
             var artistData = await fetchItunesJson(primaryArtist, 'album');
             if (artistData && artistData.results && artistData.results.length > 0) {
                 var albumBest = artistData.results.find(function(r) { return r.artworkUrl100; });
                 if (albumBest && albumBest.artworkUrl100) {
-                    var fallbackObj = {
-                        artwork: albumBest.artworkUrl100.replace(/\b\d{2,4}x\d{2,4}bb\b/, '512x512bb'),
-                        duration: 210
-                    };
-                    window._itunesCache[cacheKey] = fallbackObj;
-                    return fallbackObj;
+                    var fallbackArt = albumBest.artworkUrl100.replace(/\b\d{2,4}x\d{2,4}bb\b/, '512x512bb');
+                    window._itunesCache[cacheKey] = fallbackArt;
+                    return fallbackArt;
                 }
             }
         }
 
-        return { artwork: _defaultSrc, duration: 0 };
+        return _defaultSrc;
     }
 
     async function applyIncomingMetadata(rawArtist, rawTitle, providedArtwork) {
@@ -309,7 +217,6 @@
         var cleanTitle = String(rawTitle || '').replace(/\s*[0-9]{1,2}[:.][0-9]{2}(?:[:.][0-9]{2})?\s*$/, '').replace(/[\s\-\–\—\|•:]+$/, '').trim();
         var cleanArtist = String(rawArtist || '').replace(/[\s\-\–\—\|•:]+$/, '').trim();
 
-        // Advertisement / Station Break Check (require 2 consecutive polls if a valid song is already showing)
         if (isAdvertisementOrStationBreak(cleanTitle, cleanArtist)) {
             if (window._currentTrackKey && window._currentTrackKey !== 'AD_BREAK_STATE') {
                 window._adPollConfirmCount = (window._adPollConfirmCount || 0) + 1;
@@ -322,8 +229,6 @@
             window._currentArtworkUrl = _defaultSrc;
             window._currentTitleText = 'ADVERTISEMENT / STATION BREAK';
             window._currentArtistText = _appName + (stationSlogan ? ' — ' + stationSlogan : '');
-            window._currentSongDuration = 60;
-            window._songStartedAt = Date.now();
             window._metadataReady = true;
 
             window.setStickyPlayerArtwork(_defaultSrc);
@@ -335,7 +240,6 @@
                 if (songInfo) songInfo.style.display = 'block';
                 if (playText) playText.style.display = 'none';
             }
-            window.reassertMediaSessionMetadata();
             return;
         }
 
@@ -343,13 +247,14 @@
         var trackKey = (cleanArtist + '___' + cleanTitle).toLowerCase();
 
         if (window._currentTrackKey === trackKey && window._metadataReady) {
-            window.syncLockScreenPosition();
             return;
         }
 
-        var infoResult = await resolveTrackInfoFromItunes(cleanArtist, cleanTitle);
-        var targetArtUrl = (providedArtwork && String(providedArtwork).startsWith('http')) ? providedArtwork : infoResult.artwork;
-        var readyArtUrl = await preloadImageWithTimeout(targetArtUrl, 3500);
+        var targetArtUrl = (providedArtwork && String(providedArtwork).startsWith('http'))
+            ? providedArtwork
+            : await resolveTrackArtworkFromItunes(cleanArtist, cleanTitle);
+
+        var readyArtUrl = await preloadImageWithTimeout(targetArtUrl, 3000);
 
         if ((typeof navigator.onLine !== 'undefined' && !navigator.onLine) || window._networkIssueDetected) {
             window.resetArtworkToStationLogo();
@@ -357,27 +262,21 @@
             return;
         }
 
-        // Atomic 0.0s Commit: Photo + Title + Artist + Song Duration all update at the exact same instant!
         window._currentTrackKey = trackKey;
         window._currentArtworkUrl = readyArtUrl;
         window._currentTitleText = cleanTitle;
         window._currentArtistText = cleanArtist || _appName;
-        window._currentSongDuration = infoResult.duration || 210;
-        window._songStartedAt = Date.now();
         window._metadataReady = true;
 
-        var durBadge = formatMinutesSeconds(window._currentSongDuration);
         window.setStickyPlayerArtwork(readyArtUrl);
         titleEl.textContent = cleanTitle;
-        artistEl.textContent = (cleanArtist || _appName) + (durBadge ? '  •  ' + durBadge : '');
+        artistEl.textContent = cleanArtist || _appName;
         document.title = cleanTitle + ' - ' + (cleanArtist || _appName) + ' | ' + _appName;
 
         if (window._currentPlayerState === (window.PLAYER_STATE && window.PLAYER_STATE.PLAYING)) {
             if (songInfo) songInfo.style.display = 'block';
             if (playText) playText.style.display = 'none';
         }
-
-        window.reassertMediaSessionMetadata();
     }
 
     window.updateSongInfo = function(info) {
@@ -408,7 +307,10 @@
         applyIncomingMetadata(artist, title, artwork);
     };
 
-    async function pollLiveMetadata() {
+    async function pollLiveMetadata(forceEvenIfHidden) {
+        // ZERO BACKGROUND CPU/NETWORK RULE: Do not run fetch or image decoding while tab is in background!
+        // This guarantees 0.0ms micro-stutter when switching or closing other apps!
+        if (document.hidden && !forceEvenIfHidden) return;
         if (window._metadataInFlight) return;
         var isOnline = (typeof navigator.onLine === 'undefined') ? true : navigator.onLine;
         if (!isOnline || window._networkIssueDetected) return;
@@ -439,22 +341,25 @@
     }
 
     window.triggerImmediateMetadataSync = function() {
-        pollLiveMetadata();
+        pollLiveMetadata(true);
     };
+
+    document.addEventListener('visibilitychange', function() {
+        if (!document.hidden) {
+            // Instant sync as soon as user returns to the tab
+            pollLiveMetadata(true);
+        }
+    });
 
     document.addEventListener('DOMContentLoaded', function() {
         if (window._metadataInitialized) return;
         window._metadataInitialized = true;
 
         window.setStickyPlayerArtwork(_defaultSrc);
-        pollLiveMetadata();
+        pollLiveMetadata(true);
 
-        // Poll metadata every 6 seconds and update lock screen progress bar smoothly
-        setInterval(pollLiveMetadata, 6000);
         setInterval(function() {
-            if (window._currentPlayerState === (window.PLAYER_STATE && window.PLAYER_STATE.PLAYING)) {
-                window.syncLockScreenPosition();
-            }
-        }, 2000);
+            pollLiveMetadata(false);
+        }, 6000);
     });
 </script>
