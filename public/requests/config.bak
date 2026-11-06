@@ -1,0 +1,52 @@
+<?php 
+
+$studiohost = "174.104.97.253";
+
+$studioport = 80;
+$logfile = 'connection_log.txt';
+$connection = fsockopen($studiohost, $studioport, $errno, $errstr, 10);
+$log = date('Y-m-d H:i:s') . " - Attempting to connect to $studiohost on port $studioport\n";
+
+if ($connection) {
+    $log .= "Connection successful.\n";
+    fclose($connection);
+} else {
+    $log .= "Connection failed: $errstr ($errno)\n";
+}
+file_put_contents($logfile, $log, FILE_APPEND);
+
+// Request Form Basic Settings
+$namefield = 0; // Request listener name: 0=no, 1=yes, 2=required
+$locationfield = 0; // Request location: 0=no, 1=yes, 2=required
+
+$expire = 1; // Number of days to remember name and location. 0=just for the session
+$requestsperhour = 6;
+$requestsperday = 15;
+
+$sitename = "RC101";
+$home = "/"; // Used to link to your homepage
+$css = "style.css";
+
+$header = "header.php";
+$footer = "footer.php";
+
+$script = "request.php";
+$banfile = "banned.php";
+
+// Confirmation messages for successful request submission
+$confirmationMessage = "Your song request has been received.";
+$successTitle = "Thank You!";
+
+
+// Paths/URLs for images used in the form.
+// I have added the images path in config file as you required
+$logo_path    = "http://rc101.us/images/rc101logo.png"; // Main site logo
+$good_image   = "https://jammin92.com/images/good.png";           // Icon for successful requests
+$redx_image   = "https://jammin92.com/images/redx.png";           // Icon for error messages
+$song_image   = "http://rc101.us/images/rc101songicon.png";           // Icon for song in upcoming requests
+$artist_image = "http://rc101.us/images/rc101artisticon.png";         // Icon for artist in upcoming requests
+
+$header_shading = "#eee";
+$libdir = "library";
+$buildlib = 0;
+?>

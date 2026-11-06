@@ -1,0 +1,10 @@
+################################
+# DATABASE
+################################
+# ❗ IMPORTANT:
+# If using SQLite for DEMO -> COMMENT this line
+# If using MySQL -> KEEP it ignored
+
+database/*.sqlite
+/database.sqlite
+database.sqlite

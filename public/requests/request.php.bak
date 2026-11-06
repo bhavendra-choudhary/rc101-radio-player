@@ -1,0 +1,1469 @@
+<?php
+
+// Started the session for persisting error messages between requests
+
+session_start();
+
+
+
+// Disabled error display on screen
+
+ini_set('display_errors', 0);
+
+ini_set('display_startup_errors', 0);
+
+error_reporting(0);
+
+
+
+// Debug mode flag
+
+$debug = false;
+
+
+
+// configuration and helper functions
+
+require_once("config.php");
+
+require_once("function.php");
+
+
+
+/**
+
+ * generateKey()
+
+ *
+
+ * @param string $artist The artist name
+
+ * @param string $title  The song title
+
+ * @return string        A unique key in the format "artist|title"
+
+ */
+
+function generateKey($artist, $title) {
+
+    // Remove unwanted characters, trim, convert to lowercase, and remove spaces
+
+    $artist = strtolower(trim(preg_replace("/[^a-z0-9 ]/", "", $artist)));
+
+    $title  = strtolower(trim(preg_replace("/[^a-z0-9 ]/", "", $title)));
+
+    $artist = str_replace(" ", "", $artist);
+
+    $title  = str_replace(" ", "", $title);
+
+    return $artist . '|' . $title;
+
+}
+
+
+
+// Initialized variables for error messages, confirmation message, etc.
+
+$errormsg  = "";
+
+$alt       = "";
+
+$body      = "";
+
+$name      = "";
+
+$location  = "";
+
+$rq        = "";
+
+$response  = "";
+
+
+
+// Check if the form was just submitted
+
+$justSubmitted = (isset($_GET['submitted']) && $_GET['submitted'] == 1);
+
+
+
+// Ban Check
+
+if (!empty($banfile)) {
+
+    $banlist = @file($banfile, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES);
+
+    if (is_array($banlist) && in_array($_SERVER["REMOTE_ADDR"], $banlist)) {
+
+        echo "<h1 align='center'>Sorry, you are not allowed to use this request form.</h1>";
+
+        exit;
+
+    }
+
+}
+
+
+
+
+
+// Daily rate limiting
+
+if (!isset($_COOKIE["SPS1"])) {
+
+    $day = time() + 86400;
+
+    $value = $requestsperday . ":" . $day;
+
+    $daycount = $requestsperday;
+
+    setcookie("SPS1", $value, $day);
+
+} else {
+
+    list($daycount, $day) = explode(":", $_COOKIE["SPS1"]);
+
+}
+
+
+
+// Hourly rate limiting
+
+if (!isset($_COOKIE["SPS2"])) {
+
+    $hour = time() + 3600;
+
+    $value = $requestsperhour . ":" . $hour;
+
+    $hourcount = $requestsperhour;
+
+    setcookie("SPS2", $value, $hour);
+
+} else {
+
+    list($hourcount, $hour) = explode(":", $_COOKIE["SPS2"]);
+
+}
+
+
+
+$script = $_SERVER["SCRIPT_NAME"];
+
+if (!empty($libdir)) {
+
+    $path = $libdir . "/";
+
+}
+
+// Get the function parameter to know if the form was submitted
+
+$func = isset($_REQUEST["func"]) ? $_REQUEST["func"] : "";
+
+
+
+// simulation mode for testing. Please keep it false for real requests
+
+$simulate = false;
+
+
+
+// Process Form Submission
+
+if ($func === "Send Your Request") {
+
+    // Validats required fields (request selection, name, and location as needed)
+
+    if (empty($_POST["rq"])) {
+
+        $errormsg .= "No request was selected. Please try again.<br>";
+
+    } elseif (($namefield == 2) && empty($_POST["name"])) {
+
+        $errormsg .= "Your name is required. Please try again.<br>";
+
+    } elseif (($locationfield == 2) && empty($_POST["location"])) {
+
+        $errormsg .= "Your location is required. Please try again.<br>";
+
+    } elseif (($daycount > 0) && ($hourcount > 0)) {
+
+        // Sanitized and prepared the request data
+
+        $rq = rawurldecode($_POST["rq"]);
+
+        $rq = stripslashes($rq);
+
+        $rq = trim($rq);
+
+        error_log("Requested file (before fix): " . $rq);
+
+        // Replaced double pipes with a backslash (for file path corrections)
+
+        $rq = str_replace('||', '\\', $rq);
+
+        error_log("Requested file (after fix): " . $rq);
+
+        $name = isset($_POST["name"]) ? rawurldecode($_POST["name"]) : "";
+
+        $name = stripslashes($name);
+
+        $location = isset($_POST["location"]) ? rawurldecode($_POST["location"]) : "";
+
+        $location = stripslashes($location);
+
+        $exp = ($expire > 0) ? time() + ($expire * 86400) : 0;
+
+        $command = "Insert Request=" . $rq . "|" . $_SERVER["REMOTE_ADDR"];
+
+        if ($namefield || $locationfield) {
+
+            $command .= "|" . $name . "|" . $location;
+
+        }
+
+        $command .= "\r\n";
+
+        error_log("Insert command: " . $command);
+
+        // If simulation mode is enabled, simulate a successful response; otherwise, send the command
+
+        if ($simulate) {
+
+            $response = "Your request has been submitted\r\n";
+
+            error_log("Simulated station response: " . $response);
+
+        } else {
+
+            $fp = @fsockopen($studiohost, $studioport, $errno, $errstr, 10);
+
+            if ($fp !== false) {
+
+                fwrite($fp, $command);
+
+                $response = fgets($fp);
+
+                fclose($fp);
+
+                error_log("Station response: " . $response);
+
+            } else {
+
+                // Append connection errors to the error message
+
+                $errormsg .= "$errno: $errstr<br>";
+
+            }
+
+        }
+
+        // Check if the response indicates success
+
+        if (stripos($response, "has been submitted") !== false) {
+
+            $daycount -= 1;
+
+            setcookie("SPS1", "$daycount:$day", $day);
+
+            $hourcount -= 1;
+
+            setcookie("SPS2", "$hourcount:$hour", $hour);
+
+            $alt = $confirmationMessage; // Set the success message
+
+        } else {
+
+            if (empty($errormsg)) {
+
+                // If the response is unexpected, I have removed any "Unexpected response: " prefix and add the message only
+
+                $errormsg .= str_replace("Unexpected response: ", "", htmlspecialchars($response, ENT_QUOTES)) . "<br>";
+
+            }
+
+        }
+
+    } else {
+
+        // rate limit error message.
+
+        $errormsg = "Sorry, you've reached your request limit. Please try again " .
+
+                    (($daycount == 0) ? timediff($day, 1, 2) : timediff($hour, 1, 2)) . ".<br>";
+
+    }
+
+    
+
+    if (!empty($errormsg)) {
+
+        $_SESSION['errormsg'] = $errormsg;
+
+        header("Location: " . $script . "?submitted=1");
+
+        exit;
+
+    }
+
+}
+
+?>
+
+<!DOCTYPE html>
+
+<html lang="en">
+
+<head>
+
+    <meta charset="UTF-8">
+
+    <!-- Page title uses site name from config.php -->
+
+    <title><?php echo htmlspecialchars($sitename, ENT_QUOTES); ?> Requests</title>
+
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+
+    <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700&display=swap" rel="stylesheet">
+
+    <?php 
+
+    if (!empty($css)) {
+
+        echo "<link rel='stylesheet' type='text/css' href='" . htmlspecialchars($css, ENT_QUOTES) . "'>\n";
+
+    }
+
+    ?>
+
+    <style>
+
+        /* Submit Button Color */
+
+        .btn-primary {
+
+            background-color: #a10606 !important; /* Default primary color */
+
+            border-color: #a10606 !important;
+
+            color: #fff;
+
+        }
+
+        .btn-primary:hover,
+
+        .btn-primary:focus,
+
+        .btn-primary:active,
+
+        .btn-primary.active,
+
+        .open > .dropdown-toggle.btn-primary {
+
+            background-color: #042182 !important; /* Hover state */
+
+            border-color: #042182 !important;
+
+        }
+
+        
+
+        /* Global Body Styling */
+
+        body {
+
+            background: linear-gradient(135deg, #f37966, #afd1fc);
+
+            font-family: 'Roboto', sans-serif;
+
+            margin: 0;
+
+            padding: 0;
+
+        }
+
+        /* Card Styling */
+
+        .card {
+
+            background-color: #ffffff;
+
+            border: none;
+
+            border-radius: 10px;
+
+            box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+
+            margin-top: 20px;
+
+            padding: 20px;
+
+            transition: transform 0.3s ease, box-shadow 0.3s ease;
+
+        }
+
+        .card:hover {
+
+            transform: translateY(-5px);
+
+            box-shadow: 0 8px 16px rgba(0,0,0,0.15);
+
+            z-index: 1;
+
+        }
+
+        /* Card Header Styling */
+
+        .card-header {
+            font-size: 24px; /* Header font size in px */
+
+            background: linear-gradient(90deg, #fecdc8, #eaeaea);
+
+            color: #000000;
+
+            font-style: normal; /* Italic */
+
+            font-weight: bold; /* Bold */
+
+            padding-bottom: 10px;
+
+            border-bottom: 1px solid <?php echo $header_shading; ?>;
+            
+            text-align: center;
+        }
+
+        /* Card Body */
+
+        .card-body {
+
+            padding-top: 10px;
+
+        }
+
+        /* Main Container for Request Form */
+
+        .make-request-container {
+
+            display: flex;
+
+            justify-content: center;
+
+            align-items: center;
+
+            min-height: 100vh;
+
+            padding: 15px;
+
+        }
+
+        .make-request-form {
+
+            width: 100%;
+
+            max-width: 600px;
+
+            margin: auto;
+
+            z-index: 1000;
+
+        }
+
+        /* Logo Styling */
+
+        /* Logo Styling */
+        .logo-container {
+            
+            display: flex;
+
+            justify-content: center; /* Centers horizontally */
+            
+            align-items: center;
+        }
+        
+        .logo-inside {
+            
+            width: 100%;
+            
+            max-width: 600px; /* Adjust as needed */
+            
+            height: auto;
+            
+            display: block;
+        
+        }
+
+        /* Confirmation Container */
+
+        .confirmation-container {
+
+            max-width: 600px;
+
+            margin: auto;
+
+            padding: 20px;
+
+        }
+
+        /* Upcoming Requests Styling */
+
+        .upcoming-request {
+
+            border-bottom: 1px dashed #ccc;
+
+            padding-bottom: 15px;
+
+            margin-bottom: 25px;
+
+        }
+
+        .upcoming-request p {
+
+            color: #000;
+
+            margin: 0;
+
+            white-space: nowrap;
+
+            overflow: hidden;
+
+            text-overflow: ellipsis;
+
+        }
+
+        /* Success/Error Message Container */
+
+        .success-container {
+
+            box-sizing: border-box;
+
+        }
+
+        .success-top {
+
+            display: flex;
+
+            align-items: center;
+
+            white-space: nowrap;
+
+        }
+
+        .success-image {
+
+            max-width: 30px; /* Icon size in px */
+
+            margin-right: 10px;
+
+        }
+
+        .success-title {
+
+            font-size: 24px; /* Title font size in px */
+
+        }
+
+        .success-bottom {
+
+            margin-top: 10px;
+
+            width: 100%;
+
+            box-sizing: border-box;
+
+            white-space: nowrap;
+
+        }
+
+        .success-message {
+
+            font-size: 19px; /* Message font size in px */
+
+            margin: 0;
+
+        }
+
+        /* Song and Artist Text Styling */
+
+        .song-title {
+
+            font-weight: bold;
+
+            color: #000;
+
+            font-size: 14px; /* Song title font size in px */
+
+            white-space: nowrap;
+
+            overflow: hidden;
+
+            text-overflow: ellipsis;
+
+        }
+
+        .artist-name {
+
+            font-size: 12px; /* Artist name font size in px */
+
+            font-style: italic;
+
+            white-space: nowrap;
+
+            overflow: hidden;
+
+            text-overflow: ellipsis;
+
+        }
+
+        /* Request Row Layout */
+
+        .request-row {
+
+            display: flex;
+
+            align-items: center;
+
+        }
+
+        .request-text {
+
+            flex: 1;
+
+            white-space: nowrap;
+
+            overflow: hidden;
+
+            text-overflow: ellipsis;
+
+            margin-left: 5px;
+
+        }
+
+        .requester-info {
+
+            font-size: 10px; /* Requester info font size in px */
+
+        }
+
+        /* Icons for Song and Artist */
+
+        .song-logo {
+
+            width: 30px;
+
+            vertical-align: middle;
+
+            margin-right: 5px;
+
+        }
+
+        .artist-logo {
+
+            width: 29px;
+
+            vertical-align: middle;
+
+            margin-right: 5px;
+
+        }
+
+        /* "Request Another Song?" Link Styling */
+
+        .request-another {
+
+            font-size: 16px; /* Link font size in px */
+
+            color: #007bff;
+
+            text-decoration: underline;
+
+            cursor: pointer;
+
+            display: block;
+
+            margin-top: 15px;
+
+        }
+
+        /* "Try Again?" Link Styling */
+
+        .try-again {
+            font-size: 16px; /* Link font size in px */
+            color: #007bff;
+            text-decoration: underline;
+            cursor: pointer;
+            display: block;
+            margin-top: 15px;
+        }
+
+        /* Search Dropdown (#seachDIV) Styling */
+
+        #seachDIV {
+
+            background: #fff;
+
+            border: 1px solid #ccc;
+
+            max-height: 50vh;
+
+            overflow-y: auto;
+
+            position: absolute;
+
+            top: 100%;
+
+            left: 0;
+
+            right: 0;
+
+            z-index: 1050 !important;
+
+            display: none;
+
+        }
+
+        #seachDIV table {
+
+            width: 100%;
+
+            margin: 0;
+
+            padding: 0;
+
+        }
+
+        #seachDIV tr {
+
+            cursor: pointer;
+
+        }
+
+        #seachDIV tr:hover, #seachDIV tr.active {
+
+            background-color: #e9efbf;
+
+        }
+
+        #seachDIV td {
+
+            padding: 8px 12px;
+
+        }
+
+        /* Spinner Styling */
+
+        .spinner {
+
+            display: flex;
+
+            justify-content: center;
+
+            padding: 10px;
+
+        }
+
+        mark {
+
+            background: yellow;
+
+            padding: 0;
+
+        }
+
+        /* Responsive Adjustments */
+
+        @media (max-width: 576px) {
+
+            .card-header {
+
+                font-size: 20px;
+
+            }
+
+            .card-body p {
+
+                font-size: 16px;
+
+            }
+
+            .logo-inside {
+
+                max-width: 450px;
+
+                margin-left: auto;
+
+                margin-right: auto;
+
+                display: block;
+
+            }
+
+            .success-image {
+
+                max-width: 20px;
+
+                margin-right: 5px;
+
+            }
+
+            .success-title {
+
+                font-size: 20px;
+
+            }
+
+            .success-message {
+
+                font-size: 16px !important;
+
+            }
+
+        }
+
+        /* Ensured proper text wrapping */
+
+        .confirmation-container p,
+
+        .upcoming-request p,
+
+        .card-body p {
+
+            word-wrap: break-word;
+
+            overflow-wrap: break-word;
+
+            white-space: normal;
+
+        }
+
+    </style>
+
+</head>
+
+<body>
+
+    <!-- Main container for the request form -->
+
+    <div class="make-request-container">
+
+        <div class="make-request-form">
+
+            <?php 
+
+            $body = '';
+
+            
+
+            // ----------------------------
+
+            // Display the Site Logo
+
+            // ----------------------------
+
+            // Uses the logo path from config.php
+
+            $body .= '<div class="logo-container">';
+
+            $body .= '    <img src="' . htmlspecialchars($logo_path, ENT_QUOTES) . '" alt="Jammin 92 Logo" class="logo-inside">';
+
+            $body .= '</div>';
+
+            
+
+            // ----------------------------
+
+            // Display Confirmation/Error Card
+
+            // ----------------------------
+
+            if ($func === "Send Your Request") {
+
+                // When form submission was processed.
+
+                if (!empty($alt)) {
+
+                    // Successful submission
+
+                    $cardHeader = "Request Submitted";
+
+                    $img = $good_image;
+
+                    $message = htmlspecialchars($alt, ENT_QUOTES);
+
+                    $displayTitle = htmlspecialchars($successTitle, ENT_QUOTES);
+
+                } else {
+
+                    // Submission error occurred
+
+                    $cardHeader = "Request Not Submitted";
+
+                    $img = $redx_image;
+
+                    // Removed any "Unexpected response: " prefix from error message as it won't look good
+
+                    $message = str_replace("Unexpected response: ", "", strip_tags($errormsg));
+
+                    $displayTitle = "Request Error";
+
+                }
+
+                
+
+                $body .= '<div class="card mb-3">';
+
+                $body .= '  <div class="card-header text-center">' . $cardHeader . '</div>';
+
+                $body .= '  <div class="card-body">';
+
+                $body .= '      <div class="success-container">';
+
+                $body .= '          <div class="success-top">';
+
+                $body .= '              <img src="' . $img . '" alt="Status" class="success-image">';
+
+                $body .= '              <span class="success-title">' . $displayTitle . '</span>';
+
+                $body .= '          </div>';
+
+                $body .= '          <div class="success-bottom">';
+
+                $body .= '              <p class="success-message">' . $message . '</p>';
+
+                $body .= '          </div>';
+
+                // Show "Request Another Song?" link only if submission was successful
+
+                // OR if the error message contains "already requested" as in timeout or limit errors it does not make sense
+
+                if (!empty($alt) || (empty($alt) && stripos($message, "already requested") !== false)) {
+
+                     $body .= '          <a href="' . htmlspecialchars($script, ENT_QUOTES) . '?submitted=1" class="request-another">Request Another Song?</a>';
+
+                }
+
+                if (stripos($message, "No request was selected. Please try again.") !== false) {
+
+                    $body .= '          <a href="' . htmlspecialchars($script, ENT_QUOTES) . '?submitted=1" class="try-again">Try Again?</a>';
+
+                }
+
+                $body .= '      </div>';
+
+                $body .= '  </div>';
+
+                $body .= '</div>';
+
+            } else {
+
+                // GET branch: No new form submission.
+
+                if (isset($_SESSION['errormsg'])) {
+
+                    // Display error message stored in session
+
+                    $cardHeader = "Request Not Submitted";
+
+                    $img = $redx_image;
+
+                    $displayTitle = "Request Error";
+
+                    $message = str_replace("Unexpected response: ", "", strip_tags($_SESSION['errormsg'], '<br>'));
+
+                    $body .= '<div class="card mb-3">';
+
+                    $body .= '  <div class="card-header text-center">' . $cardHeader . '</div>';
+
+                    $body .= '  <div class="card-body">';
+
+                    $body .= '      <div class="success-container">';
+
+                    $body .= '          <div class="success-top">';
+
+                    $body .= '              <img src="' . $img . '" alt="Status" class="success-image">';
+
+                    $body .= '              <span class="success-title">' . $displayTitle . '</span>';
+
+                    $body .= '          </div>';
+
+                    $body .= '          <div class="success-bottom">';
+
+                    $body .= '              <p class="success-message">' . $message . '</p>';
+
+                    $body .= '          </div>';
+
+                    // Only add link if error message contains "already requested"
+
+                    if (stripos($message, "already requested") !== false) {
+
+                         $body .= '          <a href="' . htmlspecialchars($script, ENT_QUOTES) . '" class="request-another">Request Another Song?</a>';
+
+                    }
+
+                    if (stripos($message, "No request was selected") !== false) {
+                        
+                        $body .= '          <a href="' . htmlspecialchars($script, ENT_QUOTES) . '" class="try-again">Try Again?</a>';
+                   }
+
+                    $body .= '      </div>';
+
+                    $body .= '  </div>';
+
+                    $body .= '</div>';
+
+                    // Clear the session error after displaying
+
+                    unset($_SESSION['errormsg']);            
+
+                } elseif (($daycount > 0) && ($hourcount > 0)) {
+
+                    $body .= '<div class="card">';
+
+                    $body .= '  <div class="card-header text-center">Make A Request</div>';
+
+                    $body .= '  <div class="card-body">';
+
+                    $body .= '    <form id="searchform" method="post" action="' . htmlspecialchars($script, ENT_QUOTES) . '">';
+
+                    $body .= '      <div class="mb-3 position-relative">';
+
+                    $body .= '        <input type="text" id="searchtext" name="searchtext" class="form-control form-control-lg" placeholder="Type artist or song title" autocomplete="off">';
+
+                    $body .= '        <div id="seachDIV"></div>';
+
+                    $body .= '      </div>';
+
+                    if ($namefield) {
+
+                        $body .= '      <div class="mb-3">';
+
+                        $body .= '        <input type="text" name="name" maxlength="30" class="form-control" placeholder="Your Name">';
+
+                        $body .= '      </div>';
+
+                    }
+
+                    if ($locationfield) {
+
+                        $body .= '      <div class="mb-3">';
+
+                        $body .= '        <input type="text" name="location" maxlength="30" class="form-control" placeholder="Your Location">';
+
+                        $body .= '      </div>';
+
+                    }
+
+                    $body .= '      <input type="hidden" id="searchkey" name="rq">';
+
+                    $body .= '      <input type="hidden" name="func" value="Send Your Request">';
+
+                    $body .= '      <button type="submit" class="btn btn-primary btn-lg w-100">Submit Your Request</button>';
+
+                    $body .= '    </form>';
+
+                    $body .= '  </div>';
+
+                    $body .= '</div>';
+
+                } else {
+
+                    $img = $redx_image;
+
+                    $message = "Sorry, you've reached your request limit. Please try again " .
+
+                               (($daycount == 0) ? timediff($day, 1, 2) : timediff($hour, 1, 2)) . ".";
+
+                    $displayTitle = "Request Error";
+
+                    $body .= '<div class="card mb-3">';
+
+                    $body .= '  <div class="card-body">';
+
+                    $body .= '      <div class="success-container">';
+
+                    $body .= '          <div class="success-top">';
+
+                    $body .= '              <img src="' . $img . '" alt="Status" class="success-image">';
+
+                    $body .= '              <span class="success-title">' . $displayTitle . '</span>';
+
+                    $body .= '          </div>';
+
+                    $body .= '          <div class="success-bottom">';
+
+                    $body .= '              <p class="success-message">' . $message . '</p>';
+
+                    $body .= '          </div>';
+
+                    $body .= '      </div>';
+
+                    $body .= '  </div>';
+
+                    $body .= '</div>';
+
+                }
+
+            }
+
+            
+
+            // ----------------------------
+
+            // Display Upcoming Song Requests Section
+
+            // ----------------------------
+
+            $body .= '<div class="card">';
+
+            $body .= '  <div class="card-header">Upcoming Song Requests</div>';
+
+            $body .= '  <div class="card-body">';
+
+            
+
+            // Get the list of requests from the server
+
+            $serverRequests = getrequests($studiohost, $studioport);
+
+            if (!empty($serverRequests) && is_array($serverRequests)) {
+
+                // Reversed the array so that newest requests appear first
+
+                $serverRequests = array_reverse($serverRequests);
+
+            }
+
+            
+
+            if (!empty($serverRequests) && is_array($serverRequests)) {
+
+                foreach ($serverRequests as $requestLine) {
+
+                    $requestLine = trim($requestLine);
+
+                    if (empty($requestLine) || $requestLine == "OK") continue;
+
+                    $fields = explode("|", $requestLine);
+
+                    // Ensure the line has the expected number of fields
+
+                    if (count($fields) < 4) continue;
+
+                    
+
+                    // Parsed the first field to extract the timestamp and requester name to get the requester details from sever
+
+                    $parts = preg_split('/\s{2,}/', trim($fields[0]));
+
+                    $reqName = (count($parts) >= 2) ? trim($parts[1]) : "";
+
+                    $artist = trim($fields[1]);  // Artist name(s)
+
+                    $title = trim($fields[2]);   // Song title
+
+                    $reqLocation = trim($fields[3]); // Requester's location
+
+                    
+
+                    $body .= '<div class="upcoming-request">';
+
+                    $body .= '  <div class="request-row">';
+
+                    $body .= '      <img src="' . $song_image . '" alt="Song" class="song-logo">';
+
+                    $body .= '      <div class="request-text song-title">' . htmlspecialchars($title, ENT_QUOTES) . '</div>';
+
+                    $body .= '  </div>';
+
+                    // If an artist is provided, display it.
+
+                    if (!empty($artist)) {
+
+                        $body .= '  <div class="request-row" style="margin-top:8px;">';
+
+                        $body .= '      <img src="' . $artist_image . '" alt="Artist" class="artist-logo">';
+
+                        $body .= '      <div class="request-text artist-name">' . htmlspecialchars($artist, ENT_QUOTES) . '</div>';
+
+                        $body .= '  </div>';
+
+                    }
+
+                    // If requester name or location is provided, display them.
+
+                    if (!empty($reqName) || !empty($reqLocation)) {
+
+                        $body .= '  <div class="request-row" style="margin-top:4px;">';
+
+                        $body .= '      <div class="request-text requester-info">Requested by: ' . htmlspecialchars($reqName, ENT_QUOTES);
+
+                        if (!empty($reqName) && !empty($reqLocation)) {
+
+                            $body .= ' from ';
+
+                        }
+
+                        $body .= htmlspecialchars($reqLocation, ENT_QUOTES) . '</div>';
+
+                        $body .= '  </div>';
+
+                    }
+
+                    $body .= '</div>';
+
+                }
+
+            } else {
+
+                $body .= '<p>No upcoming requests.</p>';
+
+            }
+
+            
+
+            $body .= '  </div>';
+
+            $body .= '</div>';
+
+            
+
+            if ($debug) {
+
+                $body .= "\n<!-- Debug: daycount=$daycount, hourcount=$hourcount, script=$script -->\n";
+
+            }
+
+            
+
+            echo $body;
+
+            ?>
+
+        </div>
+
+    </div>
+
+    <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+
+    <script>
+    // ----------------------------
+    // Search Suggestions Script
+    // ----------------------------
+    $(document).ready(function(){
+    var selectionMade = false;
+    var debounceTimer;
+    var lastSearchTerm = "";
+    var currentRequest = null;
+    var activeIndex = -1;
+
+    function normalize(str) {
+        return str.toLowerCase().replace(/[^a-z0-9\s]/g, '').trim();
+    }
+
+    function highlightMatch(text, term) {
+        var regex = new RegExp('(' + term + ')', 'gi');
+        return text.replace(regex, '<mark>$1</mark>');
+    }
+
+    $.ajax({
+        url: './update_cache.php',
+        type: 'GET',
+        cache: false,
+        success: function(data) {
+            console.log("Cache update triggered: " + data);
+        },
+        error: function(xhr, status, error) {
+            console.log("Cache update failed: " + error);
+        }
+    });
+
+    $("#searchtext").on('keydown', function(e) {
+        var items = $("#seachDIV table tr");
+        if (items.length > 0 && (e.key === "ArrowDown" || e.key === "ArrowUp" || e.key === "Enter")) {
+            if (e.key === "ArrowDown") {
+                e.preventDefault();
+                activeIndex = (activeIndex + 1) % items.length;
+                items.removeClass('active');
+                $(items[activeIndex]).addClass('active');
+            } else if (e.key === "ArrowUp") {
+                e.preventDefault();
+                activeIndex = (activeIndex - 1 + items.length) % items.length;
+                items.removeClass('active');
+                $(items[activeIndex]).addClass('active');
+            } else if (e.key === "Enter") {
+                e.preventDefault();
+                if (activeIndex >= 0) {
+                    var $selected = $(items[activeIndex]);
+                    var request = $selected.data("file");
+                    var searchTerm = $selected.data("text");
+                    $("#searchtext").val(searchTerm);
+                    selectionMade = true;
+                    $("#searchkey").val(request);
+                    $("#seachDIV").hide().html("");
+                }
+            }
+        }
+    });
+
+    $("#searchtext").keyup(function(e){
+        if(["ArrowDown", "ArrowUp", "Enter"].includes(e.key)) return;
+        var searchtext = $(this).val();
+        lastSearchTerm = searchtext;
+        activeIndex = -1;
+        if(searchtext.length < 2){
+            $("#seachDIV").hide().html("");
+            return;
+        }
+        if(selectionMade) return;
+        clearTimeout(debounceTimer);
+        debounceTimer = setTimeout(function(){
+            $("#seachDIV").show().html('<div class="spinner"><div class="spinner-border text-primary" role="status"><span class="visually-hidden">Loading...</span></div></div>');
+            if(currentRequest !== null) {
+                currentRequest.abort();
+            }
+            currentRequest = $.ajax({
+                url: './pre_load.php',
+                type: 'POST',
+                data: { searchtext: searchtext },
+                cache: false,
+                success: function(data){
+                    if($("#searchtext").val() === lastSearchTerm){
+                        var $table = $(data);
+                        var normalizedSearch = normalize(lastSearchTerm);
+                        var rows = $table.find('td').map(function(){
+                            var text = $(this).data("text");
+                            var file = $(this).data("file");
+                            var normalizedText = normalize(text);
+                            var songTitle = text;
+                            var artistName = "";
+
+                            if (text.indexOf(" - ") > -1) {
+                                var parts = text.split(" - ");
+                                songTitle = parts[0];
+                                artistName = parts[1];
+                            }
+
+                            return {
+                                row: $(this).closest('tr'),
+                                songTitle: songTitle,
+                                artistName: artistName,
+                                normalizedSongTitle: normalize(songTitle),
+                                normalizedArtistName: normalize(artistName),
+                                file: file,
+                                text: text
+                            };
+                        }).get();
+
+                        
+                        rows.sort((a, b) => {
+    function exactWordMatch(str, term) {
+        return new RegExp(`\\b${term}\\b`, 'i').test(str); // Ensures "THE" is a standalone word
+    }
+
+    function startsWithWord(str, term) {
+        return new RegExp(`^${term}\\b`, 'i').test(str); // Ensures it starts with "THE" as a full word
+    }
+
+    function containsSeparateWord(str, term) {
+        return str.includes(term) && exactWordMatch(str, term);
+    }
+
+    function containsPartialWord(str, term) {
+        return str.includes(term) && !exactWordMatch(str, term);
+    }
+
+    var aSongExact = exactWordMatch(a.normalizedSongTitle, normalizedSearch);
+    var bSongExact = exactWordMatch(b.normalizedSongTitle, normalizedSearch);
+    var aSongStartsWith = startsWithWord(a.normalizedSongTitle, normalizedSearch);
+    var bSongStartsWith = startsWithWord(b.normalizedSongTitle, normalizedSearch);
+    var aSongContains = containsSeparateWord(a.normalizedSongTitle, normalizedSearch);
+    var bSongContains = containsSeparateWord(b.normalizedSongTitle, normalizedSearch);
+    var aSongPartial = containsPartialWord(a.normalizedSongTitle, normalizedSearch);
+    var bSongPartial = containsPartialWord(b.normalizedSongTitle, normalizedSearch);
+
+    var aArtistExact = exactWordMatch(a.normalizedArtistName, normalizedSearch);
+    var bArtistExact = exactWordMatch(b.normalizedArtistName, normalizedSearch);
+    var aArtistStartsWith = startsWithWord(a.normalizedArtistName, normalizedSearch);
+    var bArtistStartsWith = startsWithWord(b.normalizedArtistName, normalizedSearch);
+    var aArtistContains = containsSeparateWord(a.normalizedArtistName, normalizedSearch);
+    var bArtistContains = containsSeparateWord(b.normalizedArtistName, normalizedSearch);
+    var aArtistPartial = containsPartialWord(a.normalizedArtistName, normalizedSearch);
+    var bArtistPartial = containsPartialWord(b.normalizedArtistName, normalizedSearch);
+
+    // 1. Songs that start with "THE" (as a full word)
+    if (bSongStartsWith - aSongStartsWith !== 0) return bSongStartsWith - aSongStartsWith;
+
+    // 2. Songs that contain "THE" as a separate word
+    if (bSongContains - aSongContains !== 0) return bSongContains - aSongContains;
+
+    // 3. Artists that start with "THE" (as a full word)
+    if (bArtistStartsWith - aArtistStartsWith !== 0) return bArtistStartsWith - aArtistStartsWith;
+
+    // 4. Artists that contain "THE" as a separate word
+    if (bArtistContains - aArtistContains !== 0) return bArtistContains - aArtistContains;
+
+    // 5. Songs that contain "THE" inside another word (e.g., "therefore", "other")
+    if (bSongPartial - aSongPartial !== 0) return bSongPartial - aSongPartial;
+
+    // 6. Artists that contain "THE" inside another word
+    if (bArtistPartial - aArtistPartial !== 0) return bArtistPartial - aArtistPartial;
+
+    // 7. Sort everything else alphabetically
+    return a.normalizedSongTitle.localeCompare(b.normalizedSongTitle);
+});
+
+
+                        if(rows.length > 0){
+                            var html = '<table class="table table-hover mb-0">';
+                            rows.forEach(function(item){
+                                var highlightedSong = highlightMatch(item.songTitle, lastSearchTerm);
+                                var highlightedArtist = item.artistName ? highlightMatch(item.artistName, lastSearchTerm) : "";
+                                html += '<tr data-text="' + item.text + '" data-file="' + item.file + '">';
+                                html += '<td>';
+                                html += '<div class="fw-bold suggestion-song">' + highlightedSong + '</div>';
+                                if (highlightedArtist) {
+                                    html += '<div class="text-muted suggestion-artist">' + highlightedArtist + '</div>';
+                                }
+                                html += '</td>';
+                                html += '</tr>';
+                            });
+                            html += '</table>';
+                            $("#seachDIV").html(html).show();
+                        } else {
+                            $("#seachDIV").html('<div class="p-2">No relevant results.</div>').show();
+                        }
+                    }
+                },
+                complete: function(){
+                    currentRequest = null;
+                }
+            });
+        }, 100);
+    });
+
+    $("#searchtext").on('input', function(){
+        selectionMade = false;
+    });
+
+    $("#seachDIV").on("mousedown", "tr", function(){
+        var request = $(this).data("file");
+        var searchTerm = $(this).data("text");
+        $("#searchtext").val(searchTerm);
+        selectionMade = true;
+        $("#searchkey").val(request);
+        $("#seachDIV").hide().html("");
+    });
+
+    $(document).click(function(e){
+        if(!$(e.target).closest("#seachDIV, #searchtext").length){
+            $("#seachDIV").hide();
+        }
+    });
+});
+</script>
+
+</body>
+
+</html>
+

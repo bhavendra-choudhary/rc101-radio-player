@@ -1,0 +1,106 @@
+
+ol li	{	
+	list-style-type:	decimal;
+	}	
+
+ol ol li	{	
+	list-style-type:	lower-alpha;
+	}	
+
+ol ol ol li	{	
+	list-style-type:	lower-roman;
+	}	
+
+table, tbody, tr, td	{	
+	font-size-adjust:	.58;
+	}	
+
+table {
+	width: 100%;
+}
+
+th	{	
+	vertical-align:	baseline;
+	text-align:	left;
+	font-size:	1em;
+	font-weight:	bold;
+	}
+	
+h1, h2, h3, h4, h5, h6, dt, th, thead, tfoot	{	
+	font-weight: bold;
+	font-family: Verdana, Geneva, Arial, Helvetica, sans-serif;
+}
+
+h1, h2, h3 {
+    margin-top:	1em;
+	text-align: center;
+}
+
+p {
+	font-size: 1em;
+	font-family: Verdana, Geneva, Arial, Helvetica, sans-serif;
+}
+
+/* Prevent forms from generating unwanted padding or margins */
+FORM {
+	margin-top: 0px;
+	margin-left: 0px;
+	margin-right: 0px;
+	margin-bottom: 0px;
+	padding-bottom: 0px;
+	padding-left: 0px;
+	padding-right: 0px;
+	padding-top: 0px;
+}
+ 
+/* General form elements */
+input, textarea, select {
+	color:	black;
+	background:	white;
+	font-family: Verdana, Geneva, Arial, Helvetica, sans-serif;
+	font-size: 1em;
+}
+
+small	{	
+	font-size:	.92em;
+	}	
+
+big	{	
+	font-size:	1.17em;
+	}	
+
+pre	{	
+	font-family:	'Monotype.com', Courier New, monospace;
+	}	
+
+em	{
+	font-weight:	bold;
+	color:	red;
+	background:	white;
+	}	
+		
+strong	{	
+	font-style:	italic;
+	font-weight:	bold;
+	color:	red;
+	background:	white;
+	}	
+		
+em strong, strong em	{	
+	text-transform:	uppercase;
+	font-style:	normal;
+	font-weight:	bolder;
+	color:	red;
+	background:	white;
+	}	
+    
+hr	{	
+	color:	black;
+	}	
+label{
+    font-size:1em;
+}
+img{
+    max-width: 100%;
+    height: auto;
+}

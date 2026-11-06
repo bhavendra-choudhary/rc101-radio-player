@@ -1,0 +1,87 @@
+:root {
+    --player-song-title-color: #fbff00;
+    --player-artist-name-color: #ffffff;
+    --player-background-color: #023669;
+    --main-text-color: #960336;
+    --heading-color: #900412;
+    --link-color: #bec3c6;
+    --button-bg-color: #2c3e50;
+    --button-text-color: #ffffff;
+    --header-bg-color: #ffffff;
+    --footer-bg-color: #860411;
+    --footer-text-color: #ffffff;
+    --nav-bg-color: #ffffff;
+    --nav-text-color: #2c3e50;
+}
+
+/* 1. Media Player Song Title Color */
+#current-title, #current-title *, .player-song, #mini-song, .player-song-title, .track-title, .live-song-title, #song-title, .song-title, 
+.current-song-title, .now-playing-title, .hero-player-title, #playerSongTitle {
+    color: var(--player-song-title-color) !important;
+}
+
+/* 2. Media Player Artist Name Color */
+#current-artist, #current-artist *, .player-artist-name, .track-artist, .live-artist-name, #song-artist, .artist-name, 
+.current-artist-name, .now-playing-artist, .hero-player-artist, #playerArtistName {
+    color: var(--player-artist-name-color) !important;
+}
+
+/* 3. Media Player Background Color */
+#sticky-player, .sticky-player, .bottom-player, .player-bar, #bottomPlayer, .audio-player-container, 
+.player-wrapper, .compact-player, .car-player-container {
+    background-color: var(--player-background-color) !important;
+    background: var(--player-background-color) !important;
+}
+
+/* 4. Main Website Text Color */
+body, p, .text-content, .lead, .news-card-description, .concert-meta-info, 
+.contest-description, .contact-info-text {
+    color: var(--main-text-color) !important;
+}
+
+/* 5. Heading Color */
+h1, h2, h3, h4, h5, h6, .display-1, .display-2, .display-3, .display-4, .display-5, 
+.section-header h3, .news-card-title, .concert-card .card-title, .modal-title, .concerts-nearby-title {
+    color: var(--heading-color) !important;
+}
+
+/* 6. Link Color */
+a:not(.btn):not(.nav-link), .news-card-link, .read-more-link, .ticket-link, .footer-links a {
+    color: var(--link-color) !important;
+}
+
+/* 7. Button Background Color */
+.btn-primary, .play-btn, .btn-action, .btn-submit, .btn-request, .load-more-btn {
+    background-color: var(--button-bg-color) !important;
+    border-color: var(--button-bg-color) !important;
+}
+
+/* 8. Button Text Color */
+.btn-primary, .btn-primary *, .play-btn, .btn-action, .btn-submit, .btn-request, .load-more-btn {
+    color: var(--button-text-color) !important;
+}
+
+/* 9. Header Background Color */
+.site-header, .top-header, .header-promo-strip, #topHeader, .announcement-banner {
+    background-color: var(--header-bg-color) !important;
+}
+
+/* 10. Navigation Background Color */
+.navbar, .navbar-light, .navbar-expand-lg, #mainNavbar, .mobile-nav-drawer {
+    background-color: var(--nav-bg-color) !important;
+}
+
+/* 11. Navigation Text Color */
+.navbar-nav .nav-link, .navbar-nav .nav-link:visited, .mobile-nav-link, .navbar-brand {
+    color: var(--nav-text-color) !important;
+}
+
+/* 12. Footer Background Color */
+footer, .site-footer, .footer-section, #mainFooter {
+    background-color: var(--footer-bg-color) !important;
+}
+
+/* 13. Footer Text Color */
+footer, footer p, footer a, footer .text-muted, footer h5, .footer-text, .copyright-band {
+    color: var(--footer-text-color) !important;
+}

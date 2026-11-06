@@ -1,0 +1,130 @@
+================================================================================
+                    RADIO STATION WEBSITE - UPLOAD INSTRUCTIONS
+================================================================================
+
+This file explains the directory structure for uploading files to the server.
+
+--------------------------------------------------------------------------------
+ROOT DIRECTORY FOR UPLOAD:
+--------------------------------------------------------------------------------
+
+Upload the entire project to your web server's root directory (usually):
+  - public_html/
+  - www/
+  - htdocs/
+
+The "public" folder should be your document root (the folder that serves web pages).
+
+--------------------------------------------------------------------------------
+FILE UPLOAD DIRECTORIES:
+--------------------------------------------------------------------------------
+
+1. ADS / BANNERS
+   Upload to: public/storage/ads/
+   Supported formats: JPEG, PNG, JPG, GIF
+   Max size: 2MB
+   Note: These are managed via Admin Dashboard > Ads
+
+2. UPLOADED NEWS IMAGES
+   Upload to: public/storage/uploaded_news/
+   Supported formats: JPEG, PNG, JPG, GIF
+   Max size: 2MB
+   Note: These are managed via Admin Dashboard > Entertainment News
+
+3. COMMUNITY EVENT IMAGES
+   Upload to: public/storage/community_events/
+   Supported formats: JPEG, PNG, JPG, GIF
+   Max size: 2MB
+   Note: These are managed via Admin Dashboard > Community Events
+
+4. CONTEST IMAGES
+   Upload to: public/storage/contests/{contest_id}/
+   Supported formats: JPEG, PNG, JPG, GIF
+   Max size: 2MB
+   Note: These are managed via Admin Dashboard > Contests
+
+5. STATION LOGOS / STATIC IMAGES
+   Upload to: public/images/
+   Current logos used:
+     - Landscape_Logo.png (main logo)
+     - jamminlogotrans.png (transparent logo)
+     - jammin92-logo.jpg (square logo)
+     - favicon.png (browser icon)
+
+--------------------------------------------------------------------------------
+DATABASE FILE:
+--------------------------------------------------------------------------------
+
+SQLite Database location: database/database.sqlite
+
+If migrating to a new server:
+1. Copy the entire project
+2. Run: php artisan migrate (to create new tables)
+   OR copy the existing database.sqlite file
+
+--------------------------------------------------------------------------------
+CONFIGURATION FILES:
+--------------------------------------------------------------------------------
+
+.env file - Contains environment settings including:
+  - Database configuration
+  - Stream URL
+  - API keys
+  - Mail settings
+
+Make sure to update the .env file with your server-specific settings.
+
+--------------------------------------------------------------------------------
+ADMIN PANEL ACCESS:
+--------------------------------------------------------------------------------
+
+Admin Dashboard URL: https://yoursite.com/admin
+Default login: Set up during initial configuration
+
+Features available in Admin:
+  - Manage Ads/Banners
+  - Manage Entertainment News
+  - Manage Community Events (NEW)
+  - Manage Contests
+  - Site Settings
+  - Footer Settings
+
+--------------------------------------------------------------------------------
+NEW FEATURES ADDED:
+--------------------------------------------------------------------------------
+
+1. BLUETOOTH/CAR STEREO METADATA FIX
+   - Song title and artist now display on car stereos via Bluetooth
+   - Station logo displays in the album art field
+   - Works with iOS CarPlay and Android Auto
+
+2. CONCERTS "NO CONCERTS FOUND" FIX
+   - The message no longer appears when concerts are successfully loaded
+   
+3. TRENDING ARTISTS SECTION
+   - Commented out/hidden as requested
+   - Can be re-enabled by editing resources/views/index.blade.php
+
+4. COMMUNITY EVENTS (ADMIN MANAGEABLE)
+   - New admin section at /admin/community-events
+   - Create, edit, delete community events
+   - Events display on homepage with icon, date, location, and description
+   - Falls back to default events if none are configured
+
+--------------------------------------------------------------------------------
+TROUBLESHOOTING:
+--------------------------------------------------------------------------------
+
+If images don't display:
+1. Check file permissions (755 for directories, 644 for files)
+2. Ensure storage symlink exists: php artisan storage:link
+3. Verify files are in the correct directory
+
+If admin panel doesn't work:
+1. Run: php artisan migrate
+2. Clear cache: php artisan cache:clear
+3. Check .env file configuration
+
+================================================================================
+                              END OF INSTRUCTIONS
+================================================================================
