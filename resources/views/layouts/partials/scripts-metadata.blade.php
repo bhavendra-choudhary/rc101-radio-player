@@ -18,16 +18,36 @@
     let stationSlogan = @json($resolvedSlogan ?? '');
     const _appName = @json($resolvedAppName);
     const _defaultSrc = @json($resolvedDefaultArt);
+    const _defaultAbsoluteSrc = _defaultSrc.startsWith('http') ? _defaultSrc : (window.location.origin + (_defaultSrc.startsWith('/') ? '' : '/') + _defaultSrc);
 
     window._defaultLogoUrl = _defaultSrc;
     window._currentTrackKey = '';
-    window._currentArtworkUrl = _defaultSrc;
-    window._currentTitleText = '';
-    window._currentArtistText = '';
+    window._currentArtworkUrl = _defaultAbsoluteSrc;
+    window._currentTitleText = _appName;
+    window._currentArtistText = stationSlogan || 'Live Country Radio';
     window._metadataReady = false;
     window._metadataInFlight = false;
     window._adPollConfirmCount = 0;
     window._itunesCache = {};
+
+    function getAlbumTitle() {
+        return stationSlogan ? (_appName + ' - ' + stationSlogan) : _appName;
+    }
+
+    function buildArtworkObjects(srcUrl) {
+        var fullUrl = (srcUrl || _defaultAbsoluteSrc);
+        if (!fullUrl.startsWith('http') && !fullUrl.startsWith('data:')) {
+            fullUrl = window.location.origin + (fullUrl.startsWith('/') ? '' : '/') + fullUrl;
+        }
+        return [
+            { src: fullUrl, sizes: '96x96',   type: 'image/jpeg' },
+            { src: fullUrl, sizes: '128x128', type: 'image/jpeg' },
+            { src: fullUrl, sizes: '192x192', type: 'image/jpeg' },
+            { src: fullUrl, sizes: '256x256', type: 'image/jpeg' },
+            { src: fullUrl, sizes: '384x384', type: 'image/jpeg' },
+            { src: fullUrl, sizes: '512x512', type: 'image/jpeg' }
+        ];
+    }
 
     window.setStickyPlayerArtwork = function(srcUrl) {
         var targetSrc = srcUrl || _defaultSrc;
@@ -47,16 +67,47 @@
     };
 
     window.resetArtworkToStationLogo = function() {
-        window._currentArtworkUrl = _defaultSrc;
+        window._currentArtworkUrl = _defaultAbsoluteSrc;
         window._metadataReady = false;
         window.setStickyPlayerArtwork(_defaultSrc);
+        window.reassertMediaSessionMetadata();
+    };
+
+    // Keep iOS Safari, Android Chrome Lock Screen & Car Bluetooth 100% synced
+    window.reassertMediaSessionMetadata = function() {
+        if (!('mediaSession' in navigator)) return;
+        try {
+            var titleText = window._currentTitleText || _appName;
+            var artistText = window._currentArtistText || (stationSlogan || 'Live Radio');
+            var artUrl = window._currentArtworkUrl || _defaultAbsoluteSrc;
+
+            navigator.mediaSession.metadata = new MediaMetadata({
+                title: titleText,
+                artist: artistText,
+                album: getAlbumTitle(),
+                artwork: buildArtworkObjects(artUrl)
+            });
+
+            if (typeof window.bindMasterMediaSessionHandlers === 'function') {
+                window.bindMasterMediaSessionHandlers();
+            }
+
+            var audio = (typeof RadioAudio !== 'undefined') ? RadioAudio.get() : document.getElementById('live-audio');
+            var isPlaying = (audio && !audio.paused && !audio.error && !window.userPaused);
+            navigator.mediaSession.playbackState = isPlaying ? 'playing' : 'paused';
+        } catch (e) {}
     };
 
     function preloadImageWithTimeout(url, timeoutMs) {
-        timeoutMs = timeoutMs || 3000;
+        timeoutMs = timeoutMs || 2500;
         return new Promise(function(resolve) {
-            if (!url || url === _defaultSrc) {
-                resolve(_defaultSrc);
+            if (!url || url === _defaultSrc || url === _defaultAbsoluteSrc) {
+                resolve(_defaultAbsoluteSrc);
+                return;
+            }
+            // When tab is in background, skip DOM Image decode to guarantee 0.0ms audio thread stutter!
+            if (document.hidden) {
+                resolve(url);
                 return;
             }
             var done = false;
@@ -73,7 +124,7 @@
             };
             img.onerror = function() {
                 clearTimeout(timer);
-                finish(_defaultSrc);
+                finish(_defaultAbsoluteSrc);
             };
             img.src = url;
         });
@@ -133,7 +184,7 @@
             var res2 = await fetch(proxyUrl, { method: 'GET', headers: { 'Accept': 'application/json' } });
             if (res2.ok) {
                 var data2 = await res2.json();
-                if (data2 && Array.isArray(data2.results) && data.results.length > 0) return data2;
+                if (data2 && Array.isArray(data2.results) && data2.results.length > 0) return data2;
             }
         } catch (e) {}
 
@@ -197,7 +248,7 @@
             }
         }
 
-        return _defaultSrc;
+        return _defaultAbsoluteSrc;
     }
 
     async function applyIncomingMetadata(rawArtist, rawTitle, providedArtwork) {
@@ -226,7 +277,7 @@
             if (window._currentTrackKey === 'AD_BREAK_STATE') return;
 
             window._currentTrackKey = 'AD_BREAK_STATE';
-            window._currentArtworkUrl = _defaultSrc;
+            window._currentArtworkUrl = _defaultAbsoluteSrc;
             window._currentTitleText = 'ADVERTISEMENT / STATION BREAK';
             window._currentArtistText = _appName + (stationSlogan ? ' — ' + stationSlogan : '');
             window._metadataReady = true;
@@ -240,6 +291,7 @@
                 if (songInfo) songInfo.style.display = 'block';
                 if (playText) playText.style.display = 'none';
             }
+            window.reassertMediaSessionMetadata();
             return;
         }
 
@@ -254,7 +306,7 @@
             ? providedArtwork
             : await resolveTrackArtworkFromItunes(cleanArtist, cleanTitle);
 
-        var readyArtUrl = await preloadImageWithTimeout(targetArtUrl, 3000);
+        var readyArtUrl = await preloadImageWithTimeout(targetArtUrl, 2500);
 
         if ((typeof navigator.onLine !== 'undefined' && !navigator.onLine) || window._networkIssueDetected) {
             window.resetArtworkToStationLogo();
@@ -277,6 +329,8 @@
             if (songInfo) songInfo.style.display = 'block';
             if (playText) playText.style.display = 'none';
         }
+
+        window.reassertMediaSessionMetadata();
     }
 
     window.updateSongInfo = function(info) {
@@ -307,10 +361,7 @@
         applyIncomingMetadata(artist, title, artwork);
     };
 
-    async function pollLiveMetadata(forceEvenIfHidden) {
-        // ZERO BACKGROUND CPU/NETWORK RULE: Do not run fetch or image decoding while tab is in background!
-        // This guarantees 0.0ms micro-stutter when switching or closing other apps!
-        if (document.hidden && !forceEvenIfHidden) return;
+    async function pollLiveMetadata() {
         if (window._metadataInFlight) return;
         var isOnline = (typeof navigator.onLine === 'undefined') ? true : navigator.onLine;
         if (!isOnline || window._networkIssueDetected) return;
@@ -341,13 +392,13 @@
     }
 
     window.triggerImmediateMetadataSync = function() {
-        pollLiveMetadata(true);
+        pollLiveMetadata();
     };
 
     document.addEventListener('visibilitychange', function() {
         if (!document.hidden) {
-            // Instant sync as soon as user returns to the tab
-            pollLiveMetadata(true);
+            window.setStickyPlayerArtwork(window._currentArtworkUrl || _defaultSrc);
+            pollLiveMetadata();
         }
     });
 
@@ -356,10 +407,10 @@
         window._metadataInitialized = true;
 
         window.setStickyPlayerArtwork(_defaultSrc);
-        pollLiveMetadata(true);
+        window.reassertMediaSessionMetadata();
+        pollLiveMetadata();
 
-        setInterval(function() {
-            pollLiveMetadata(false);
-        }, 6000);
+        // Lightweight 8-second poll so Lock Screen & Car Bluetooth stay updated without touching audio buffer
+        setInterval(pollLiveMetadata, 8000);
     });
 </script>
