@@ -24,28 +24,27 @@
     window._currentTrackKey = '';
     window._currentArtworkUrl = _defaultAbsoluteSrc;
     window._currentTitleText = _appName;
-    window._currentArtistText = stationSlogan || 'Live Country Radio';
+    window._currentArtistText = stationSlogan || 'Your Rockin\' Country';
     window._metadataReady = false;
     window._metadataInFlight = false;
     window._adPollConfirmCount = 0;
     window._itunesCache = {};
+    window._lastMediaSessionSig = '';
 
     function getAlbumTitle() {
         return stationSlogan ? (_appName + ' - ' + stationSlogan) : _appName;
     }
 
-    // Feed multi-size HTTPS image URLs into Browser's Native Notification so thumbnail ALWAYS updates on song change
-    function buildNativeNotificationArtwork(srcUrl, trackKey) {
+    // Build clean multi-size artwork array (NO query strings on mzstatic URLs so Android/iOS Lock Screen never blocks the image!)
+    function buildCleanArtworkArray(srcUrl) {
         var fullUrl = (srcUrl || _defaultAbsoluteSrc);
         if (!fullUrl.startsWith('http') && !fullUrl.startsWith('data:')) {
             fullUrl = window.location.origin + (fullUrl.startsWith('/') ? '' : '/') + fullUrl;
         }
-        var sep = fullUrl.indexOf('?') === -1 ? '?' : '&';
-        var cacheTag = sep + 'track=' + encodeURIComponent(trackKey || 'live');
 
         if (fullUrl.indexOf('mzstatic.com') !== -1) {
             var makeSize = function(sz) {
-                return fullUrl.replace(/\b\d{2,4}x\d{2,4}bb\b/, sz + 'x' + sz + 'bb') + cacheTag;
+                return fullUrl.replace(/\b\d{2,4}x\d{2,4}bb\b/, sz + 'x' + sz + 'bb');
             };
             return [
                 { src: makeSize(96),  sizes: '96x96',   type: 'image/jpeg' },
@@ -57,14 +56,13 @@
             ];
         }
 
-        var tagged = fullUrl + cacheTag;
         return [
-            { src: tagged, sizes: '96x96',   type: 'image/jpeg' },
-            { src: tagged, sizes: '128x128', type: 'image/jpeg' },
-            { src: tagged, sizes: '192x192', type: 'image/jpeg' },
-            { src: tagged, sizes: '256x256', type: 'image/jpeg' },
-            { src: tagged, sizes: '384x384', type: 'image/jpeg' },
-            { src: tagged, sizes: '512x512', type: 'image/jpeg' }
+            { src: fullUrl, sizes: '96x96',   type: 'image/jpeg' },
+            { src: fullUrl, sizes: '128x128', type: 'image/jpeg' },
+            { src: fullUrl, sizes: '192x192', type: 'image/jpeg' },
+            { src: fullUrl, sizes: '256x256', type: 'image/jpeg' },
+            { src: fullUrl, sizes: '384x384', type: 'image/jpeg' },
+            { src: fullUrl, sizes: '512x512', type: 'image/jpeg' }
         ];
     }
 
@@ -89,31 +87,43 @@
         window._currentArtworkUrl = _defaultAbsoluteSrc;
         window._metadataReady = false;
         window.setStickyPlayerArtwork(_defaultSrc);
-        window.syncNativeBrowserNotification();
+        window.reassertMediaSessionMetadata(true);
     };
 
-    // Modify Browser's Own Native Notification to show Song Name, Singer Name, and Song Picture
-    window.syncNativeBrowserNotification = function() {
+    // Master Lock Screen & Notification Controller:
+    // - When PLAYING: Shows Song Title, Singer Name, and Song Thumbnail Picture
+    // - When PAUSED: Shows RC 101 Logo and "RC 101 - Your Rockin' Country"
+    window.reassertMediaSessionMetadata = function(forceRefresh) {
         if (!('mediaSession' in navigator) || typeof MediaMetadata === 'undefined') return;
         try {
-            var titleText = window._currentTitleText || _appName;
-            var artistText = window._currentArtistText || (stationSlogan || 'Live Radio');
-            var artUrl = window._currentArtworkUrl || _defaultAbsoluteSrc;
+            var audio = (typeof RadioAudio !== 'undefined') ? RadioAudio.get() : document.getElementById('live-audio');
+            var isPlaying = (audio && !audio.paused && !audio.error && !window.userPaused);
 
-            navigator.mediaSession.metadata = new MediaMetadata({
-                title: titleText,
-                artist: artistText,
-                album: getAlbumTitle(),
-                artwork: buildNativeNotificationArtwork(artUrl, window._currentTrackKey)
-            });
+            var notifTitle  = isPlaying ? (window._currentTitleText || _appName) : _appName;
+            var notifArtist = isPlaying ? (window._currentArtistText || (stationSlogan || 'Live Country Radio')) : (stationSlogan || 'Your Rockin\' Country');
+            var notifArtUrl = isPlaying ? (window._currentArtworkUrl || _defaultAbsoluteSrc) : _defaultAbsoluteSrc;
 
-            if (typeof window.bindNativeNotificationControls === 'function') {
-                window.bindNativeNotificationControls();
+            var sig = (isPlaying ? 'PLAY:' : 'PAUSE:') + notifTitle + '|' + notifArtist + '|' + notifArtUrl;
+            if (forceRefresh || window._lastMediaSessionSig !== sig) {
+                window._lastMediaSessionSig = sig;
+                try { navigator.mediaSession.metadata = null; } catch (e) {}
+                navigator.mediaSession.metadata = new MediaMetadata({
+                    title: notifTitle,
+                    artist: notifArtist,
+                    album: getAlbumTitle(),
+                    artwork: buildCleanArtworkArray(notifArtUrl)
+                });
             }
+
+            if (typeof window.bindMasterMediaSessionHandlers === 'function') {
+                window.bindMasterMediaSessionHandlers();
+            }
+
+            navigator.mediaSession.playbackState = isPlaying ? 'playing' : 'paused';
         } catch (e) {}
     };
 
-    function preloadImageWithTimeout(url, timeoutMs) {
+    function preloadImageInCache(url, timeoutMs) {
         timeoutMs = timeoutMs || 3000;
         return new Promise(function(resolve) {
             if (!url || url === _defaultSrc || url === _defaultAbsoluteSrc) {
@@ -206,7 +216,7 @@
         entity = entity || 'song';
         try {
             var proxyUrl = '/proxy/itunes-search?term=' + encodeURIComponent(query) + '&entity=' + encodeURIComponent(entity);
-            var res = await fetch(proxyUrl, { method: 'GET', cache: 'default' });
+            var res = await fetch(proxyUrl, { method: 'GET', cache: 'force-cache' });
             if (res.ok) {
                 var data = await res.json();
                 if (data && Array.isArray(data.results) && data.results.length > 0) return data;
@@ -308,12 +318,6 @@
         var playText = document.getElementById('play-to-listen-text');
         if (!artistEl || !titleEl) return;
 
-        // Remove any old song-length progress bar if present
-        var oldProgressWrap = document.getElementById('live-song-progress-wrap');
-        if (oldProgressWrap && oldProgressWrap.parentNode) {
-            oldProgressWrap.parentNode.removeChild(oldProgressWrap);
-        }
-
         var parsed = extractCleanArtistAndTitle(rawArtist, rawTitle);
         var cleanArtist = parsed.artist;
         var cleanTitle  = parsed.title;
@@ -341,13 +345,14 @@
                 if (songInfo) songInfo.style.display = 'block';
                 if (playText) playText.style.display = 'none';
             }
-            window.syncNativeBrowserNotification();
+            window.reassertMediaSessionMetadata(true);
             return;
         }
 
         window._adPollConfirmCount = 0;
         var trackKey = (cleanArtist + '___' + cleanTitle).toLowerCase();
 
+        // CRITICAL CPU OPTIMIZATION: If the exact same song is still playing, do ZERO work!
         if (window._currentTrackKey === trackKey && window._metadataReady) {
             return;
         }
@@ -356,7 +361,7 @@
             ? providedArtwork
             : await resolveTrackArtworkFromItunes(cleanArtist, cleanTitle);
 
-        var readyArtUrl = await preloadImageWithTimeout(candidateArt, 3000);
+        var readyArtUrl = await preloadImageInCache(candidateArt, 3000);
 
         if ((typeof navigator.onLine !== 'undefined' && !navigator.onLine) || window._networkIssueDetected) {
             window.resetArtworkToStationLogo();
@@ -364,7 +369,7 @@
             return;
         }
 
-        // Update Song Name + Singer Name + Picture together at the exact same instant
+        // Atomic 0.0s Commit: Picture + Song Title + Singer Name update together
         window._currentTrackKey = trackKey;
         window._currentArtworkUrl = readyArtUrl;
         window._currentTitleText = cleanTitle;
@@ -381,8 +386,7 @@
             if (playText) playText.style.display = 'none';
         }
 
-        // Push Song Name + Singer Name + Picture into Browser's Native Notification
-        window.syncNativeBrowserNotification();
+        window.reassertMediaSessionMetadata(true);
     }
 
     window.updateSongInfo = function(info) {
@@ -402,7 +406,8 @@
         applyIncomingMetadata(artist, title, artwork);
     };
 
-    async function pollLiveMetadata() {
+    // Main-thread fallback poll (used once on load or if Worker is unavailable)
+    async function pollLiveMetadataOnce() {
         if (window._metadataInFlight) return;
         var isOnline = (typeof navigator.onLine === 'undefined') ? true : navigator.onLine;
         if (!isOnline || window._networkIssueDetected) return;
@@ -412,11 +417,7 @@
             var streamUrl = window.DEFAULT_STREAM_URL || 'https://streams.radiomast.io/rc101';
             var res = await fetch('/api/stream-metadata?streamUrl=' + encodeURIComponent(streamUrl) + '&_t=' + Date.now(), {
                 method: 'GET',
-                headers: {
-                    'Accept': 'application/json',
-                    'Cache-Control': 'no-cache',
-                    'X-Requested-With': 'XMLHttpRequest'
-                },
+                headers: { 'Accept': 'application/json', 'Cache-Control': 'no-cache' },
                 cache: 'no-store'
             });
 
@@ -432,8 +433,72 @@
         }
     }
 
+    // Dedicated Background Web Worker for Metadata Polling:
+    // Runs network polling on a separate CPU thread so the Main Audio Thread experiences 0.0ms lag when switching apps or locking screen!
+    function startOffThreadMetadataWorker() {
+        if (typeof window.Worker !== 'undefined' && typeof window.Blob !== 'undefined') {
+            try {
+                var workerCode = [
+                    "var originUrl = '';",
+                    "var streamUrl = '';",
+                    "var lastRawSig = '';",
+                    "var busy = false;",
+                    "function checkMeta() {",
+                    "  if (busy || !originUrl) return;",
+                    "  busy = true;",
+                    "  var url = originUrl + '/api/stream-metadata?streamUrl=' + encodeURIComponent(streamUrl) + '&_t=' + Date.now();",
+                    "  fetch(url, { method: 'GET', headers: { 'Accept': 'application/json' }, cache: 'no-store' })",
+                    "    .then(function(r) { return r.ok ? r.json() : null; })",
+                    "    .then(function(d) {",
+                    "      busy = false;",
+                    "      if (d && (d.title || d.song || d.artist)) {",
+                    "        var sig = (d.artist || '') + '___' + (d.song || d.title || '');",
+                    "        if (sig !== lastRawSig) {",
+                    "          lastRawSig = sig;",
+                    "          postMessage({ artist: d.artist || '', title: d.song || d.title || '', artwork: d.artwork || null });",
+                    "        }",
+                    "      }",
+                    "    })",
+                    "    .catch(function() { busy = false; });",
+                    "}",
+                    "onmessage = function(e) {",
+                    "  if (e.data && e.data.cmd === 'start') {",
+                    "    originUrl = e.data.origin;",
+                    "    streamUrl = e.data.stream;",
+                    "    checkMeta();",
+                    "    setInterval(checkMeta, 5000);",
+                    "  } else if (e.data && e.data.cmd === 'force') {",
+                    "    lastRawSig = '';",
+                    "    checkMeta();",
+                    "  }",
+                    "};"
+                ].join('\n');
+
+                var blob = new Blob([workerCode], { type: 'application/javascript' });
+                window._metaWorker = new Worker(URL.createObjectURL(blob));
+                window._metaWorker.onmessage = function(e) {
+                    if (e.data) {
+                        applyIncomingMetadata(e.data.artist, e.data.title, e.data.artwork);
+                    }
+                };
+                window._metaWorker.postMessage({
+                    cmd: 'start',
+                    origin: window.location.origin,
+                    stream: window.DEFAULT_STREAM_URL || 'https://streams.radiomast.io/rc101'
+                });
+                return;
+            } catch (err) {}
+        }
+        // Fallback if Worker is blocked
+        setInterval(pollLiveMetadataOnce, 6000);
+    }
+
     window.triggerImmediateMetadataSync = function() {
-        pollLiveMetadata();
+        if (window._metaWorker) {
+            window._metaWorker.postMessage({ cmd: 'force' });
+        } else {
+            pollLiveMetadataOnce();
+        }
     };
 
     document.addEventListener('DOMContentLoaded', function() {
@@ -441,9 +506,8 @@
         window._metadataInitialized = true;
 
         window.setStickyPlayerArtwork(_defaultSrc);
-        window.syncNativeBrowserNotification();
-        pollLiveMetadata();
-
-        setInterval(pollLiveMetadata, 6000);
+        window.reassertMediaSessionMetadata(true);
+        pollLiveMetadataOnce();
+        startOffThreadMetadataWorker();
     });
 </script>

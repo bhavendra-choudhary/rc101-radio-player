@@ -31,7 +31,6 @@
         };
     }
 
-    // Exact same clean <audio> setup that triggered Chrome's native notification in 25781.jpg & zero background stutter!
     var RadioAudio = (function() {
         var _el = null;
         return {
@@ -39,7 +38,8 @@
                 if (_el && document.body && document.body.contains(_el)) return _el;
                 _el = document.getElementById('live-audio');
                 if (_el) {
-                    _el.style.cssText = 'display:none !important; width:0; height:0; pointer-events:none;';
+                    // Do NOT use display:none (which blocks Chrome Android Notification)!
+                    // Keep element as a standard non-controls audio node so Chrome always shows the Lock Screen Notification!
                     _el.preload = 'auto';
                     _el.muted = false;
                     _el.volume = 1.0;
@@ -73,7 +73,7 @@
                     try {
                         a._internalPauseCall = true;
                         a.pause();
-                        setTimeout(function() { a._internalPauseCall = false; }, 200);
+                        setTimeout(function() { a._internalPauseCall = false; }, 250);
                     } catch (e) {}
                 }
             }
@@ -90,10 +90,15 @@
     };
     window._currentPlayerState = window.PLAYER_STATE.IDLE;
 
+    // 1-Hour Bluetooth Auto-Reconnect Window (3,600,000 ms)
+    var BT_AUTO_RESUME_WINDOW_MS = 60 * 60 * 1000;
+
     window._hasUserStartedThisSession = false;
     window._hasPlayedSuccessfullyOnce = false;
     window.userPaused = true;
     window.audioInterruptedByDevice = false;
+    window._btDisconnectTimestamp = 0;
+    window._btDisconnectedDeviceHash = '';
     window._networkIssueDetected = false;
     window._lastAudioDisconnectTime = 0;
     window._lastRouteEventTime = 0;
@@ -186,6 +191,10 @@
             if (songInfo) songInfo.style.display = 'block';
             if (playText) playText.style.display = 'none';
 
+            if (typeof window.reassertMediaSessionMetadata === 'function') {
+                window.reassertMediaSessionMetadata(true);
+            }
+
             var dlg = document.getElementById('stream-reconnecting-dialogue');
             if (dlg && dlg.style.display !== 'none' && !dlg.classList.contains('srd-success')) {
                 window.showReconnectingDialogue("Connected!", "Live stream resumed.", "success");
@@ -232,6 +241,10 @@
                 playText.textContent = message || "Press Play To Listen";
                 playText.style.display = 'block';
             }
+            // When paused, show RC 101 Logo + Name in the Lock Screen Notification!
+            if (typeof window.reassertMediaSessionMetadata === 'function') {
+                window.reassertMediaSessionMetadata(true);
+            }
             if (window.userPaused || !window._hasUserStartedThisSession) {
                 window.hideReconnectingDialogue();
             }
@@ -275,10 +288,18 @@
         return true;
     };
 
-    window.setAudioInterrupted = function(val) {
+    window.setAudioInterrupted = function(val, disconnectedHash) {
         window.audioInterruptedByDevice = !!val;
         if (val) {
-            window._lastAudioDisconnectTime = Date.now();
+            var now = Date.now();
+            window._lastAudioDisconnectTime = now;
+            window._btDisconnectTimestamp = now;
+            if (disconnectedHash) {
+                window._btDisconnectedDeviceHash = disconnectedHash;
+            }
+        } else {
+            window._btDisconnectTimestamp = 0;
+            window._btDisconnectedDeviceHash = '';
         }
     };
 
@@ -286,21 +307,40 @@
         return window._lastAudioDisconnectTime || 0;
     };
 
+    // Automatically expires the Bluetooth auto-resume hold after 1 Hour (3,600,000 ms)
     window.isAudioInterrupted = function() {
-        return !!window.audioInterruptedByDevice;
+        if (!window.audioInterruptedByDevice) return false;
+        if (window._btDisconnectTimestamp > 0 && (Date.now() - window._btDisconnectTimestamp > BT_AUTO_RESUME_WINDOW_MS)) {
+            window.audioInterruptedByDevice = false;
+            window._btDisconnectTimestamp = 0;
+            window._btDisconnectedDeviceHash = '';
+            window.userPaused = true;
+            return false;
+        }
+        return true;
     };
 
-    // Connect Play/Pause actions of Browser's Native Notification directly to our player
-    window.bindNativeNotificationControls = function() {
+    // Lock Screen Notification & Bluetooth Hardware AVRCP Controls
+    window.bindMasterMediaSessionHandlers = function() {
         if (!('mediaSession' in navigator)) return;
+
+        var disabledActions = ['previoustrack', 'nexttrack', 'seekbackward', 'seekforward', 'seekto'];
+        for (var i = 0; i < disabledActions.length; i++) {
+            try { navigator.mediaSession.setActionHandler(disabledActions[i], null); } catch (e) {}
+        }
+
         try {
             navigator.mediaSession.setActionHandler('play', function() {
                 clearTimeout(_reconnectTimer);
                 clearTimeout(_recoverySafetyTimer);
                 _isRecovering = false;
+                window.setAudioInterrupted(false);
                 var pausedDuration = Date.now() - (window._lastPauseTimestamp || 0);
                 startOrResumeStream(pausedDuration > 25000);
             });
+        } catch (e) {}
+
+        try {
             navigator.mediaSession.setActionHandler('pause', function() {
                 clearTimeout(_reconnectTimer);
                 clearTimeout(_recoverySafetyTimer);
@@ -309,12 +349,13 @@
 
                 var sinceRouteChange = Date.now() - window._lastRouteEventTime;
                 if (sinceRouteChange < 2500 || window.isAudioInterrupted()) {
+                    // Bluetooth disconnected while playing -> Pause and arm 1-Hour Auto-Reconnect Timer!
                     window.userPaused = false;
                     window.setAudioInterrupted(true);
                     RadioAudio.pause();
                     window.setPlayerState(window.PLAYER_STATE.PAUSED, "Paused (Bluetooth Disconnected)");
                 } else {
-                    // User tapped Pause on the Lock Screen Notification -> Lock pause state 100% so it NEVER restarts by itself!
+                    // User pressed Pause on Lock Screen Notification -> Stay paused & show RC 101 Logo in Notification!
                     window.userPaused = true;
                     window._networkIssueDetected = false;
                     window.setAudioInterrupted(false);
@@ -322,6 +363,21 @@
                     window.setPlayerState(window.PLAYER_STATE.PAUSED, "Press Play To Listen");
                     window.hideReconnectingDialogue();
                 }
+            });
+        } catch (e) {}
+
+        try {
+            navigator.mediaSession.setActionHandler('stop', function() {
+                clearTimeout(_reconnectTimer);
+                clearTimeout(_recoverySafetyTimer);
+                _isRecovering = false;
+                window._lastPauseTimestamp = Date.now();
+                window.userPaused = true;
+                window._networkIssueDetected = false;
+                window.setAudioInterrupted(false);
+                RadioAudio.pause();
+                window.setPlayerState(window.PLAYER_STATE.PAUSED, "Press Play To Listen");
+                window.hideReconnectingDialogue();
             });
         } catch (e) {}
     };
@@ -350,6 +406,11 @@
             mountFreshStream(audio, getFreshStreamUrl());
         }
 
+        // Assert MediaSession inside user gesture so Chrome/iOS registers the Lock Screen Notification immediately!
+        if (typeof window.reassertMediaSessionMetadata === 'function') {
+            window.reassertMediaSessionMetadata(true);
+        }
+
         var playPromise = RadioAudio.play();
         if (playPromise && typeof playPromise.then === 'function') {
             playPromise.then(function() {
@@ -357,8 +418,8 @@
                 window._hasPlayedSuccessfullyOnce = true;
                 window.setPlayerState(window.PLAYER_STATE.PLAYING);
                 window.hideReconnectingDialogue();
-                if (typeof window.syncNativeBrowserNotification === 'function') {
-                    window.syncNativeBrowserNotification();
+                if (typeof window.reassertMediaSessionMetadata === 'function') {
+                    window.reassertMediaSessionMetadata(true);
                 }
             }).catch(function(error) {
                 if (error && (error.name === 'AbortError' || error.code === 20)) return;
@@ -371,8 +432,8 @@
                     RadioAudio.play().then(function() {
                         window._hasPlayedSuccessfullyOnce = true;
                         window.setPlayerState(window.PLAYER_STATE.PLAYING);
-                        if (typeof window.syncNativeBrowserNotification === 'function') {
-                            window.syncNativeBrowserNotification();
+                        if (typeof window.reassertMediaSessionMetadata === 'function') {
+                            window.reassertMediaSessionMetadata(true);
                         }
                     }).catch(function() {
                         window._networkIssueDetected = true;
@@ -455,6 +516,7 @@
             var isAllowedTrigger = (
                 reason.indexOf('bluetooth-reconnected') !== -1 ||
                 reason.indexOf('carplay-reconnected') !== -1 ||
+                reason.indexOf('mediasession') !== -1 ||
                 reason.indexOf('user') !== -1
             );
             if (!isAllowedTrigger) {
@@ -527,8 +589,8 @@
             if (typeof window.triggerImmediateMetadataSync === 'function') {
                 window.triggerImmediateMetadataSync();
             }
-            if (typeof window.syncNativeBrowserNotification === 'function') {
-                window.syncNativeBrowserNotification();
+            if (typeof window.reassertMediaSessionMetadata === 'function') {
+                window.reassertMediaSessionMetadata(true);
             }
         };
 
@@ -575,6 +637,10 @@
         return { outputCount: outputCount, count: totalAudioCount, hash: ids.join('|') };
     }
 
+    // Bluetooth Route Manager:
+    // 1. Phone playing + Bluetooth connects -> Seamless handoff to Bluetooth (keeps playing!)
+    // 2. Bluetooth playing + Bluetooth disconnects -> Pauses immediately (0 speaker leak) & starts 1-Hour timer
+    // 3. Same Bluetooth reconnects within 1 Hour -> Resumes playing automatically!
     function handleBluetoothRouteChange(eventSource) {
         if (_checkingDevices) return;
         _checkingDevices = true;
@@ -598,35 +664,43 @@
 
             var now = Date.now();
             var timeSinceDisconnect = now - window.getLastAudioDisconnectTime();
-            var wasPlayingRecently = !RadioAudio.paused();
+            var isCurrentlyPlaying = !RadioAudio.paused();
 
             var deviceRemoved = (currentSig.count < prevSig.count) || (currentSig.outputCount < prevSig.outputCount);
-            var routeShiftedWhilePlaying = (eventSource === 'devicechange' && currentSig.hash !== prevSig.hash && wasPlayingRecently && !window.isAudioInterrupted());
+            var deviceAdded   = (currentSig.count > prevSig.count) || (currentSig.outputCount > prevSig.outputCount);
 
-            if (!window.isAudioInterrupted() && (deviceRemoved || routeShiftedWhilePlaying)) {
+            // CASE 1: Phone is playing and a Bluetooth device connects (deviceAdded) -> Keep playing on Bluetooth!
+            if (deviceAdded && isCurrentlyPlaying && !window.isAudioInterrupted()) {
+                return;
+            }
+
+            // CASE 2: Playing on Bluetooth and Bluetooth disconnects (deviceRemoved) -> Pause & start 1-Hour timer!
+            if (!window.isAudioInterrupted() && deviceRemoved && isCurrentlyPlaying) {
                 clearTimeout(_btResumeTimer);
                 clearTimeout(_reconnectTimer);
                 window.userPaused = false;
-                window.setAudioInterrupted(true);
+                window.setAudioInterrupted(true, prevSig.hash);
                 RadioAudio.pause();
                 window.setPlayerState(window.PLAYER_STATE.PAUSED, "Paused (Bluetooth Disconnected)");
                 window.hideReconnectingDialogue();
                 return;
             }
 
-            var deviceAdded = (currentSig.count > prevSig.count) || (currentSig.outputCount > prevSig.outputCount);
-            var routeReturned = (currentSig.hash !== prevSig.hash && timeSinceDisconnect > 1500) ||
-                                (window.isAudioInterrupted() && eventSource === 'devicechange' && timeSinceDisconnect > 1500);
+            // CASE 3: Bluetooth was disconnected while playing, and reconnects within the 1-Hour window!
+            if (window.isAudioInterrupted() && window.isIntentStillValid() && !window.userPaused) {
+                var sameDeviceReturned = window._btDisconnectedDeviceHash && (currentSig.hash === window._btDisconnectedDeviceHash);
+                var routeRestored = deviceAdded || sameDeviceReturned || (currentSig.hash !== prevSig.hash && timeSinceDisconnect > 1200);
 
-            if ((deviceAdded || routeReturned) && window.isAudioInterrupted() && window.isIntentStillValid() && !window.userPaused) {
-                clearTimeout(_btResumeTimer);
-                _btResumeTimer = setTimeout(function() {
-                    if (window.isAudioInterrupted() && window.isIntentStillValid() && !window.userPaused) {
-                        window.setAudioInterrupted(false);
-                        window.userPaused = false;
-                        window.recoverLiveStream('bluetooth-reconnected-' + eventSource);
-                    }
-                }, 650);
+                if (routeRestored) {
+                    clearTimeout(_btResumeTimer);
+                    _btResumeTimer = setTimeout(function() {
+                        if (window.isAudioInterrupted() && window.isIntentStillValid() && !window.userPaused) {
+                            window.setAudioInterrupted(false);
+                            window.userPaused = false;
+                            window.recoverLiveStream('bluetooth-reconnected-' + eventSource);
+                        }
+                    }, 500);
+                }
             }
         }).catch(function() {
             _checkingDevices = false;
@@ -652,9 +726,10 @@
             window._hasPlayedSuccessfullyOnce = true;
             window._networkIssueDetected = false;
             clearTimeout(_reconnectTimer);
+            window.bindMasterMediaSessionHandlers();
             window.setPlayerState(window.PLAYER_STATE.PLAYING);
-            if (typeof window.syncNativeBrowserNotification === 'function') {
-                window.syncNativeBrowserNotification();
+            if (typeof window.reassertMediaSessionMetadata === 'function') {
+                window.reassertMediaSessionMetadata(true);
             }
         });
 
@@ -683,14 +758,15 @@
             setTimeout(function() {
                 if (!window._hasUserStartedThisSession || window.userPaused || !liveAudio.paused) return;
 
+                // If pause was triggered by Bluetooth disconnect, arm the 1-Hour Auto-Reconnect Timer!
                 if (Date.now() - window._lastRouteEventTime < 3000 || window.isAudioInterrupted()) {
-                    window.setAudioInterrupted(true);
+                    window.setAudioInterrupted(true, _knownAudioDevices ? _knownAudioDevices.hash : '');
                     window.setPlayerState(window.PLAYER_STATE.PAUSED, "Paused (Bluetooth Disconnected)");
                     window.hideReconnectingDialogue();
                     return;
                 }
 
-                // When paused from Browser's Native Lock Screen Notification, mark userPaused = true so it NEVER restarts!
+                // Otherwise user paused from Lock Screen Notification -> Stay paused & show RC 101 Logo!
                 window.userPaused = true;
                 window._lastPauseTimestamp = Date.now();
                 window.setPlayerState(window.PLAYER_STATE.PAUSED, "Press Play To Listen");
@@ -749,6 +825,7 @@
         var audio = RadioAudio.get();
         if (!audio) return;
 
+        // Zero work when audio is playing so background playback never stutters!
         if (!audio.paused && !audio.error && !audio.ended) {
             return;
         }
@@ -781,7 +858,7 @@
         window.setAudioInterrupted(false);
         window.hideReconnectingDialogue();
         RadioAudio.get();
-        window.bindNativeNotificationControls();
+        window.bindMasterMediaSessionHandlers();
         setupAudioListeners();
         window.setPlayerState(window.PLAYER_STATE.PAUSED, "Press Play To Listen");
         var stickyPlayer = document.getElementById('sticky-player');
