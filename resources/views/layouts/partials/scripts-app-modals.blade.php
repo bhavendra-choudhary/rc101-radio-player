@@ -89,7 +89,7 @@
                         displayConcerts(data, city, latitude, longitude);
                     })
                     .catch(error => {
-                        console.error('ÃƒÆ’Ã‚Â¢Ãƒâ€šÃ‚ÂÃƒâ€¦Ã¢â‚¬â„¢ Error loading concerts:', error);
+                        console.error('ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚ÂÃƒÆ’Ã¢â‚¬Â¦ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ Error loading concerts:', error);
 
                         // Clear container first
                         const container = document.getElementById('concerts-container');
@@ -115,7 +115,7 @@
                         hideConcertsLoading();
                     });
             } catch (error) {
-                console.error('ÃƒÆ’Ã‚Â¢Ãƒâ€šÃ‚ÂÃƒâ€¦Ã¢â‚¬â„¢ Critical error in loadConcerts:', error);
+                console.error('ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚ÂÃƒÆ’Ã¢â‚¬Â¦ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ Critical error in loadConcerts:', error);
                 hideConcertsLoading();
                 displayFallbackConcerts();
             }
@@ -245,7 +245,7 @@
             if (loadingElement) {
                 loadingElement.style.display = 'block';
             } else {
-                console.error('ÃƒÆ’Ã‚Â¢Ãƒâ€šÃ‚ÂÃƒâ€¦Ã¢â‚¬â„¢ Loading element not found');
+                console.error('ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚ÂÃƒÆ’Ã¢â‚¬Â¦ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ Loading element not found');
             }
         }
 
@@ -255,7 +255,7 @@
             if (loadingElement) {
                 loadingElement.style.display = 'none';
             } else {
-                console.error('ÃƒÆ’Ã‚Â¢Ãƒâ€šÃ‚ÂÃƒâ€¦Ã¢â‚¬â„¢ Loading element not found');
+                console.error('ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚ÂÃƒÆ’Ã¢â‚¬Â¦ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ Loading element not found');
             }
         }
 
@@ -463,7 +463,7 @@
                 @endphp
                 <!-- Hidden audio element -->
                 <audio id="live-audio" preload="auto" src="{{ $streamUrl }}" hx-preserve="true"
-                    style="position:absolute !important; left:-9999px !important; top:-9999px !important; width:1px !important; height:1px !important; opacity:0 !important; pointer-events:none !important;" playsinline
+                    style="display: none !important;" playsinline
                     webkit-playsinline x-webkit-airplay="allow" data-title=""
                     data-artist="" data-stream-url="{{ $streamUrl }}">
                     
@@ -823,6 +823,7 @@
             }
         });
     </script>
+
 
 
 
