@@ -89,7 +89,7 @@
                         displayConcerts(data, city, latitude, longitude);
                     })
                     .catch(error => {
-                        console.error('ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚ÂÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â‚¬Å¾Ã‚Â¢ Error loading concerts:', error);
+                        console.error('Γ¥î Error loading concerts:', error);
 
                         // Clear container first
                         const container = document.getElementById('concerts-container');
@@ -115,7 +115,7 @@
                         hideConcertsLoading();
                     });
             } catch (error) {
-                console.error('ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚ÂÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â‚¬Å¾Ã‚Â¢ Critical error in loadConcerts:', error);
+                console.error('Γ¥î Critical error in loadConcerts:', error);
                 hideConcertsLoading();
                 displayFallbackConcerts();
             }
@@ -245,7 +245,7 @@
             if (loadingElement) {
                 loadingElement.style.display = 'block';
             } else {
-                console.error('ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚ÂÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â‚¬Å¾Ã‚Â¢ Loading element not found');
+                console.error('Γ¥î Loading element not found');
             }
         }
 
@@ -255,7 +255,7 @@
             if (loadingElement) {
                 loadingElement.style.display = 'none';
             } else {
-                console.error('ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚ÂÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â‚¬Å¾Ã‚Â¢ Loading element not found');
+                console.error('Γ¥î Loading element not found');
             }
         }
 
@@ -462,7 +462,7 @@
                     }
                 @endphp
                 <!-- Hidden audio element -->
-                <audio id="live-audio" preload="auto" src="{{ $streamUrl }}" hx-preserve="true"
+                <audio id="live-audio" preload="none" src="{{ $streamUrl }}" hx-preserve="true"
                     style="position: fixed; bottom: 0; left: 0; width: 1px; height: 1px; opacity: 0.01; pointer-events: none; z-index: -1;" playsinline
                     webkit-playsinline x-webkit-airplay="allow" data-title=""
                     data-artist="" data-stream-url="{{ $streamUrl }}">
@@ -823,9 +823,3 @@
             }
         });
     </script>
-
-
-
-
-
-

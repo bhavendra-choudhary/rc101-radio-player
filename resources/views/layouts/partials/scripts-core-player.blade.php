@@ -38,8 +38,6 @@
                 if (_el && document.body && document.body.contains(_el)) return _el;
                 _el = document.getElementById('live-audio');
                 if (_el) {
-                    // Do NOT use display:none (which blocks Chrome Android Notification)!
-                    // Keep element as a standard non-controls audio node so Chrome always shows the Lock Screen Notification!
                     _el.preload = 'auto';
                     _el.muted = false;
                     _el.volume = 1.0;
@@ -60,7 +58,7 @@
                 if (!a || typeof a.play !== 'function') return Promise.resolve();
                 try {
                     a.muted = false;
-                    a.volume = 1.0;
+                    if (a.volume === 0) a.volume = 1.0;
                     var p = a.play();
                     return (p && typeof p.then === 'function') ? p : Promise.resolve();
                 } catch (e) {
@@ -97,6 +95,7 @@
     window._hasPlayedSuccessfullyOnce = false;
     window.userPaused = true;
     window.audioInterruptedByDevice = false;
+    window._systemCallInterrupted = false;
     window._btDisconnectTimestamp = 0;
     window._btDisconnectedDeviceHash = '';
     window._networkIssueDetected = false;
@@ -104,6 +103,7 @@
     window._lastRouteEventTime = 0;
     window._lastPlayStartTimestamp = 0;
     window._lastPauseTimestamp = 0;
+    window._lastMediaSessionPauseTime = 0;
 
     var _isRecovering = false;
     var _lastRecoveryAttempt = 0;
@@ -120,6 +120,23 @@
         if (_isRecovering) return false;
         return (audio.readyState >= 2);
     };
+
+    function AudioPersistenceManager() {
+        this.storageKey = window.getStationStorageKey('audio_state');
+    }
+    AudioPersistenceManager.prototype.saveAudioState = function() {
+        var audio = RadioAudio.get();
+        if (!audio) return;
+        try {
+            window.safeLocalStorage.setItem(this.storageKey, JSON.stringify({
+                isPlaying: window.isRealAudioPlaying(),
+                volume: audio.volume,
+                currentTime: audio.currentTime,
+                timestamp: Date.now()
+            }));
+        } catch(e) {}
+    };
+    var audioPersistenceManager = new AudioPersistenceManager();
 
     window.showReconnectingDialogue = function(title, message, state) {
         if (!window._hasUserStartedThisSession || window.userPaused) {
@@ -180,7 +197,7 @@
         if (stickyPlayer) stickyPlayer.style.display = 'flex';
         if (stickyArt) stickyArt.style.display = 'block';
 
-        var hasReadySong = window._metadataReady || (curTitleEl && curTitleEl.textContent && curTitleEl.textContent.trim() !== '' && curTitleEl.textContent.trim() !== 'Loading...');
+        var hasPreloadedSong = curTitleEl && curTitleEl.textContent && curTitleEl.textContent.trim() !== '' && curTitleEl.textContent.trim() !== 'Loading...';
 
         if (newState === window.PLAYER_STATE.PLAYING) {
             if (navbarPlayIcon) navbarPlayIcon.className = "fas fa-pause me-1";
@@ -191,8 +208,8 @@
             if (songInfo) songInfo.style.display = 'block';
             if (playText) playText.style.display = 'none';
 
-            if (typeof window.reassertMediaSessionMetadata === 'function') {
-                window.reassertMediaSessionMetadata(true);
+            if ('mediaSession' in navigator) {
+                try { navigator.mediaSession.playbackState = 'playing'; } catch(e) {}
             }
 
             var dlg = document.getElementById('stream-reconnecting-dialogue');
@@ -201,12 +218,13 @@
             }
             _reconnectAttempts = 0;
         } else if (newState === window.PLAYER_STATE.LOADING) {
+            // Instant 0-second swap to preloaded song title when Play is pressed
             if (navbarPlayIcon) navbarPlayIcon.className = "fas fa-pause me-1";
             if (miniPlayIcon)   miniPlayIcon.className   = "fas fa-pause";
             if (playIcon)       playIcon.className       = "fas fa-pause";
             if (heroIconPage)   heroIconPage.className   = "fas fa-pause me-2";
 
-            if (hasReadySong) {
+            if (hasPreloadedSong) {
                 if (songInfo) songInfo.style.display = 'block';
                 if (playText) playText.style.display = 'none';
             } else {
@@ -230,6 +248,9 @@
             if (typeof window.resetArtworkToStationLogo === 'function') {
                 window.resetArtworkToStationLogo();
             }
+            if ('mediaSession' in navigator) {
+                try { navigator.mediaSession.playbackState = 'paused'; } catch(e) {}
+            }
         } else {
             if (navbarPlayIcon) navbarPlayIcon.className = "fas fa-play me-1";
             if (miniPlayIcon)   miniPlayIcon.className   = "fas fa-play";
@@ -241,9 +262,8 @@
                 playText.textContent = message || "Press Play To Listen";
                 playText.style.display = 'block';
             }
-            // When paused, show RC 101 Logo + Name in the Lock Screen Notification!
-            if (typeof window.reassertMediaSessionMetadata === 'function') {
-                window.reassertMediaSessionMetadata(true);
+            if ('mediaSession' in navigator) {
+                try { navigator.mediaSession.playbackState = 'paused'; } catch(e) {}
             }
             if (window.userPaused || !window._hasUserStartedThisSession) {
                 window.hideReconnectingDialogue();
@@ -283,6 +303,13 @@
         audio.src = freshUrl;
     }
 
+    function savePlayingIntent(shouldPlay) {
+        try {
+            window.safeLocalStorage.setItem(window.getStationStorageKey('playing_intent'), shouldPlay ? '1' : '0');
+            window.safeLocalStorage.setItem(window.getStationStorageKey('was_playing'), shouldPlay ? '1' : '0');
+        } catch (e) {}
+    }
+
     window.isIntentStillValid = function() {
         if (!window._hasUserStartedThisSession || window.userPaused) return false;
         return true;
@@ -307,7 +334,6 @@
         return window._lastAudioDisconnectTime || 0;
     };
 
-    // Automatically expires the Bluetooth auto-resume hold after 1 Hour (3,600,000 ms)
     window.isAudioInterrupted = function() {
         if (!window.audioInterruptedByDevice) return false;
         if (window._btDisconnectTimestamp > 0 && (Date.now() - window._btDisconnectTimestamp > BT_AUTO_RESUME_WINDOW_MS)) {
@@ -320,76 +346,16 @@
         return true;
     };
 
-    // Lock Screen Notification & Bluetooth Hardware AVRCP Controls
-    window.bindMasterMediaSessionHandlers = function() {
-        if (!('mediaSession' in navigator)) return;
-
-        var disabledActions = ['previoustrack', 'nexttrack', 'seekbackward', 'seekforward', 'seekto'];
-        for (var i = 0; i < disabledActions.length; i++) {
-            try { navigator.mediaSession.setActionHandler(disabledActions[i], null); } catch (e) {}
-        }
-
-        try {
-            navigator.mediaSession.setActionHandler('play', function() {
-                clearTimeout(_reconnectTimer);
-                clearTimeout(_recoverySafetyTimer);
-                _isRecovering = false;
-                window.setAudioInterrupted(false);
-                var pausedDuration = Date.now() - (window._lastPauseTimestamp || 0);
-                startOrResumeStream(pausedDuration > 25000);
-            });
-        } catch (e) {}
-
-        try {
-            navigator.mediaSession.setActionHandler('pause', function() {
-                clearTimeout(_reconnectTimer);
-                clearTimeout(_recoverySafetyTimer);
-                _isRecovering = false;
-                window._lastPauseTimestamp = Date.now();
-
-                var sinceRouteChange = Date.now() - window._lastRouteEventTime;
-                if (sinceRouteChange < 2500 || window.isAudioInterrupted()) {
-                    // Bluetooth disconnected while playing -> Pause and arm 1-Hour Auto-Reconnect Timer!
-                    window.userPaused = false;
-                    window.setAudioInterrupted(true);
-                    RadioAudio.pause();
-                    window.setPlayerState(window.PLAYER_STATE.PAUSED, "Paused (Bluetooth Disconnected)");
-                } else {
-                    // User pressed Pause on Lock Screen Notification -> Stay paused & show RC 101 Logo in Notification!
-                    window.userPaused = true;
-                    window._networkIssueDetected = false;
-                    window.setAudioInterrupted(false);
-                    RadioAudio.pause();
-                    window.setPlayerState(window.PLAYER_STATE.PAUSED, "Press Play To Listen");
-                    window.hideReconnectingDialogue();
-                }
-            });
-        } catch (e) {}
-
-        try {
-            navigator.mediaSession.setActionHandler('stop', function() {
-                clearTimeout(_reconnectTimer);
-                clearTimeout(_recoverySafetyTimer);
-                _isRecovering = false;
-                window._lastPauseTimestamp = Date.now();
-                window.userPaused = true;
-                window._networkIssueDetected = false;
-                window.setAudioInterrupted(false);
-                RadioAudio.pause();
-                window.setPlayerState(window.PLAYER_STATE.PAUSED, "Press Play To Listen");
-                window.hideReconnectingDialogue();
-            });
-        } catch (e) {}
-    };
-
     function startOrResumeStream(forceFreshMount) {
         var audio = RadioAudio.get();
         if (!audio) return;
 
         window._hasUserStartedThisSession = true;
         window.userPaused = false;
+        window._systemCallInterrupted = false;
         window._networkIssueDetected = false;
         window.setAudioInterrupted(false);
+        savePlayingIntent(true);
         window._lastPlayStartTimestamp = Date.now();
 
         audio.muted = false;
@@ -397,18 +363,9 @@
 
         window.setPlayerState(window.PLAYER_STATE.LOADING);
 
-        if (!window._metadataReady && typeof window.triggerImmediateMetadataSync === 'function') {
-            window.triggerImmediateMetadataSync();
-        }
-
         var hasValidExistingSrc = audio.src && audio.src.indexOf('http') === 0 && !audio.error;
         if (forceFreshMount || !hasValidExistingSrc) {
             mountFreshStream(audio, getFreshStreamUrl());
-        }
-
-        // Assert MediaSession inside user gesture so Chrome/iOS registers the Lock Screen Notification immediately!
-        if (typeof window.reassertMediaSessionMetadata === 'function') {
-            window.reassertMediaSessionMetadata(true);
         }
 
         var playPromise = RadioAudio.play();
@@ -416,10 +373,11 @@
             playPromise.then(function() {
                 _reconnectAttempts = 0;
                 window._hasPlayedSuccessfullyOnce = true;
+                audioPersistenceManager.saveAudioState();
                 window.setPlayerState(window.PLAYER_STATE.PLAYING);
                 window.hideReconnectingDialogue();
-                if (typeof window.reassertMediaSessionMetadata === 'function') {
-                    window.reassertMediaSessionMetadata(true);
+                if (typeof window.triggerImmediateMetadataSync === 'function') {
+                    window.triggerImmediateMetadataSync();
                 }
             }).catch(function(error) {
                 if (error && (error.name === 'AbortError' || error.code === 20)) return;
@@ -431,10 +389,8 @@
                     mountFreshStream(audio, getFreshStreamUrl());
                     RadioAudio.play().then(function() {
                         window._hasPlayedSuccessfullyOnce = true;
+                        audioPersistenceManager.saveAudioState();
                         window.setPlayerState(window.PLAYER_STATE.PLAYING);
-                        if (typeof window.reassertMediaSessionMetadata === 'function') {
-                            window.reassertMediaSessionMetadata(true);
-                        }
                     }).catch(function() {
                         window._networkIssueDetected = true;
                         window.recoverLiveStream('play-fallback-error');
@@ -472,14 +428,77 @@
             _isRecovering = false;
             window.userPaused = true;
             window._lastPauseTimestamp = Date.now();
+            window._systemCallInterrupted = false;
             window._networkIssueDetected = false;
             window.setAudioInterrupted(false);
+            savePlayingIntent(false);
             RadioAudio.pause();
+            audioPersistenceManager.saveAudioState();
             window.setPlayerState(window.PLAYER_STATE.PAUSED, "Press Play To Listen");
             window.hideReconnectingDialogue();
         }
     };
     toggleLiveAudio = window.toggleLiveAudio;
+
+    window.bindMasterMediaSessionHandlers = function() {
+        if (!('mediaSession' in navigator)) return;
+        try {
+            navigator.mediaSession.setActionHandler('play', function() {
+                clearTimeout(_reconnectTimer);
+                clearTimeout(_recoverySafetyTimer);
+                _isRecovering = false;
+                window.setAudioInterrupted(false);
+                var pausedDuration = Date.now() - (window._lastPauseTimestamp || 0);
+                startOrResumeStream(pausedDuration > 25000);
+            });
+        } catch (e) {}
+
+        try {
+            navigator.mediaSession.setActionHandler('pause', function() {
+                window._lastMediaSessionPauseTime = Date.now();
+                window._lastPauseTimestamp = Date.now();
+                clearTimeout(_reconnectTimer);
+                clearTimeout(_recoverySafetyTimer);
+                _isRecovering = false;
+
+                var sinceRouteChange = Date.now() - window._lastRouteEventTime;
+                if (sinceRouteChange < 2500 || window.isAudioInterrupted()) {
+                    window.userPaused = false;
+                    window._systemCallInterrupted = false;
+                    window.setAudioInterrupted(true, _knownAudioDevices ? _knownAudioDevices.hash : '');
+                    RadioAudio.pause();
+                    window.setPlayerState(window.PLAYER_STATE.PAUSED, "Paused (Bluetooth Disconnected)");
+                } else {
+                    window.userPaused = true;
+                    window._systemCallInterrupted = false;
+                    window._networkIssueDetected = false;
+                    window.setAudioInterrupted(false);
+                    savePlayingIntent(false);
+                    RadioAudio.pause();
+                    window.setPlayerState(window.PLAYER_STATE.PAUSED, "Press Play To Listen");
+                    window.hideReconnectingDialogue();
+                }
+            });
+        } catch (e) {}
+
+        try {
+            navigator.mediaSession.setActionHandler('stop', function() {
+                window._lastMediaSessionPauseTime = Date.now();
+                window._lastPauseTimestamp = Date.now();
+                clearTimeout(_reconnectTimer);
+                clearTimeout(_recoverySafetyTimer);
+                _isRecovering = false;
+                window.userPaused = true;
+                window._systemCallInterrupted = false;
+                window._networkIssueDetected = false;
+                window.setAudioInterrupted(false);
+                savePlayingIntent(false);
+                RadioAudio.pause();
+                window.setPlayerState(window.PLAYER_STATE.PAUSED, "Press Play To Listen");
+                window.hideReconnectingDialogue();
+            });
+        } catch (e) {}
+    };
 
     window.forceReconnectLiveStream = function() {
         clearTimeout(_reconnectTimer);
@@ -489,7 +508,9 @@
         _reconnectAttempts = 0;
         window._hasUserStartedThisSession = true;
         window.userPaused = false;
+        window._systemCallInterrupted = false;
         window.setAudioInterrupted(false);
+        savePlayingIntent(true);
         window.showReconnectingDialogue("Connecting...", "Reconnecting to live stream...", "reconnecting");
         window.recoverLiveStream('user-force-retry');
     };
@@ -529,7 +550,6 @@
         }
 
         window._networkIssueDetected = true;
-        window._currentTrackKey = '';
         if (typeof window.resetArtworkToStationLogo === 'function') {
             window.resetArtworkToStationLogo();
         }
@@ -580,8 +600,10 @@
             _reconnectAttempts = 0;
             window._hasPlayedSuccessfullyOnce = true;
             window._networkIssueDetected = false;
+            window._systemCallInterrupted = false;
             clearTimeout(_reconnectTimer);
             clearTimeout(_recoverySafetyTimer);
+            audioPersistenceManager.saveAudioState();
             window.setPlayerState(window.PLAYER_STATE.PLAYING);
             if (window._hasPlayedSuccessfullyOnce) {
                 window.showReconnectingDialogue("Connected!", "Live stream resumed.", "success");
@@ -589,14 +611,12 @@
             if (typeof window.triggerImmediateMetadataSync === 'function') {
                 window.triggerImmediateMetadataSync();
             }
-            if (typeof window.reassertMediaSessionMetadata === 'function') {
-                window.reassertMediaSessionMetadata(true);
-            }
         };
 
         var scheduleRetry = function(err) {
             _isRecovering = false;
             if (err && err.name === 'NotAllowedError') {
+                window._systemCallInterrupted = true;
                 return;
             }
             clearTimeout(_reconnectTimer);
@@ -614,6 +634,27 @@
             p.then(onPlaySuccess).catch(scheduleRetry);
         } else {
             onPlaySuccess();
+        }
+    };
+
+    // Auto-resume when returning from a Phone Call or System Interruption without touching an already-playing stream
+    window.verifyStreamHealthOnForeground = function(source) {
+        if (!window.isIntentStillValid() || window.userPaused) return;
+        if (window.isAudioInterrupted()) {
+            window.setPlayerState(window.PLAYER_STATE.PAUSED, "Paused (Bluetooth Disconnected)");
+            return;
+        }
+
+        var audio = RadioAudio.get();
+        if (!audio) return;
+
+        if (!audio.paused && !audio.error && !audio.ended) {
+            return;
+        }
+
+        if (window._systemCallInterrupted || window._networkIssueDetected || audio.paused || audio.error || audio.ended) {
+            window._systemCallInterrupted = false;
+            startOrResumeStream(true);
         }
     };
 
@@ -637,10 +678,6 @@
         return { outputCount: outputCount, count: totalAudioCount, hash: ids.join('|') };
     }
 
-    // Bluetooth Route Manager:
-    // 1. Phone playing + Bluetooth connects -> Seamless handoff to Bluetooth (keeps playing!)
-    // 2. Bluetooth playing + Bluetooth disconnects -> Pauses immediately (0 speaker leak) & starts 1-Hour timer
-    // 3. Same Bluetooth reconnects within 1 Hour -> Resumes playing automatically!
     function handleBluetoothRouteChange(eventSource) {
         if (_checkingDevices) return;
         _checkingDevices = true;
@@ -669,16 +706,17 @@
             var deviceRemoved = (currentSig.count < prevSig.count) || (currentSig.outputCount < prevSig.outputCount);
             var deviceAdded   = (currentSig.count > prevSig.count) || (currentSig.outputCount > prevSig.outputCount);
 
-            // CASE 1: Phone is playing and a Bluetooth device connects (deviceAdded) -> Keep playing on Bluetooth!
+            // 1. Entering Vehicle / Bluetooth connects while playing on phone -> keep playing seamlessly on Bluetooth
             if (deviceAdded && isCurrentlyPlaying && !window.isAudioInterrupted()) {
                 return;
             }
 
-            // CASE 2: Playing on Bluetooth and Bluetooth disconnects (deviceRemoved) -> Pause & start 1-Hour timer!
+            // 2. Leaving Vehicle / Bluetooth disconnects while playing -> Pause immediately (never play on phone speaker)
             if (!window.isAudioInterrupted() && deviceRemoved && isCurrentlyPlaying) {
                 clearTimeout(_btResumeTimer);
                 clearTimeout(_reconnectTimer);
                 window.userPaused = false;
+                window._systemCallInterrupted = false;
                 window.setAudioInterrupted(true, prevSig.hash);
                 RadioAudio.pause();
                 window.setPlayerState(window.PLAYER_STATE.PAUSED, "Paused (Bluetooth Disconnected)");
@@ -686,7 +724,7 @@
                 return;
             }
 
-            // CASE 3: Bluetooth was disconnected while playing, and reconnects within the 1-Hour window!
+            // 3. Previously paired Bluetooth reconnects within 1-Hour window -> Auto-reconnect & resume!
             if (window.isAudioInterrupted() && window.isIntentStillValid() && !window.userPaused) {
                 var sameDeviceReturned = window._btDisconnectedDeviceHash && (currentSig.hash === window._btDisconnectedDeviceHash);
                 var routeRestored = deviceAdded || sameDeviceReturned || (currentSig.hash !== prevSig.hash && timeSinceDisconnect > 1200);
@@ -697,6 +735,7 @@
                         if (window.isAudioInterrupted() && window.isIntentStillValid() && !window.userPaused) {
                             window.setAudioInterrupted(false);
                             window.userPaused = false;
+                            savePlayingIntent(true);
                             window.recoverLiveStream('bluetooth-reconnected-' + eventSource);
                         }
                     }, 500);
@@ -725,17 +764,18 @@
             _isRecovering = false;
             window._hasPlayedSuccessfullyOnce = true;
             window._networkIssueDetected = false;
+            window._systemCallInterrupted = false;
             clearTimeout(_reconnectTimer);
             window.bindMasterMediaSessionHandlers();
+            audioPersistenceManager.saveAudioState();
             window.setPlayerState(window.PLAYER_STATE.PLAYING);
-            if (typeof window.reassertMediaSessionMetadata === 'function') {
-                window.reassertMediaSessionMetadata(true);
-            }
         });
 
         liveAudio.addEventListener('pause', function() {
+            audioPersistenceManager.saveAudioState();
             if (liveAudio._internalPauseCall) return;
-            if (!window._hasUserStartedThisSession || window.userPaused) {
+
+            if (!window._hasUserStartedThisSession || window.userPaused || (Date.now() - window._lastMediaSessionPauseTime < 1500)) {
                 window.userPaused = true;
                 window.setAudioInterrupted(false);
                 window.setPlayerState(window.PLAYER_STATE.PAUSED, "Press Play To Listen");
@@ -758,7 +798,6 @@
             setTimeout(function() {
                 if (!window._hasUserStartedThisSession || window.userPaused || !liveAudio.paused) return;
 
-                // If pause was triggered by Bluetooth disconnect, arm the 1-Hour Auto-Reconnect Timer!
                 if (Date.now() - window._lastRouteEventTime < 3000 || window.isAudioInterrupted()) {
                     window.setAudioInterrupted(true, _knownAudioDevices ? _knownAudioDevices.hash : '');
                     window.setPlayerState(window.PLAYER_STATE.PAUSED, "Paused (Bluetooth Disconnected)");
@@ -766,12 +805,23 @@
                     return;
                 }
 
-                // Otherwise user paused from Lock Screen Notification -> Stay paused & show RC 101 Logo!
-                window.userPaused = true;
-                window._lastPauseTimestamp = Date.now();
-                window.setPlayerState(window.PLAYER_STATE.PAUSED, "Press Play To Listen");
-                window.hideReconnectingDialogue();
-            }, 350);
+                // Mark as system/call interruption so returning to the app after a phone call automatically resumes
+                window._systemCallInterrupted = true;
+                window.setPlayerState(window.PLAYER_STATE.PAUSED, "Paused (Interruption / Call)");
+            }, 400);
+        });
+
+        liveAudio.addEventListener('stalled', function() {
+            clearTimeout(liveAudio._stallTimer);
+            liveAudio._stallTimer = setTimeout(function() {
+                if (window._hasPlayedSuccessfullyOnce && window.isIntentStillValid() && !window.userPaused && !window.isAudioInterrupted()) {
+                    if (liveAudio.error || liveAudio.ended || (liveAudio.paused && !window._systemCallInterrupted)) {
+                        window._networkIssueDetected = true;
+                        window.setPlayerState(window.PLAYER_STATE.RECONNECTING, "Reconnecting stream...");
+                        window.recoverLiveStream('stalled-confirmed');
+                    }
+                }
+            }, 6000);
         });
 
         liveAudio.addEventListener('error', function() {
@@ -805,7 +855,6 @@
 
     window.addEventListener('offline', function() {
         window._networkIssueDetected = true;
-        window._currentTrackKey = '';
         if (typeof window.resetArtworkToStationLogo === 'function') {
             window.resetArtworkToStationLogo();
         }
@@ -825,7 +874,6 @@
         var audio = RadioAudio.get();
         if (!audio) return;
 
-        // Zero work when audio is playing so background playback never stutters!
         if (!audio.paused && !audio.error && !audio.ended) {
             return;
         }
@@ -854,7 +902,22 @@
         }
     });
 
+    document.addEventListener('visibilitychange', function() {
+        if (!document.hidden) {
+            window.verifyStreamHealthOnForeground('visibilitychange');
+        }
+    });
+
+    window.addEventListener('focus', function() {
+        window.verifyStreamHealthOnForeground('focus');
+    });
+
+    window.addEventListener('pageshow', function() {
+        window.verifyStreamHealthOnForeground('pageshow');
+    });
+
     document.addEventListener('DOMContentLoaded', function() {
+        savePlayingIntent(false);
         window.setAudioInterrupted(false);
         window.hideReconnectingDialogue();
         RadioAudio.get();
