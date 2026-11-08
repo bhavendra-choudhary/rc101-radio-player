@@ -104,6 +104,8 @@
     window._lastPlayStartTimestamp = 0;
     window._lastPauseTimestamp = 0;
     window._lastMediaSessionPauseTime = 0;
+    window._videoInterruptionActive = false;
+    var _activeVideoCount = 0;
 
     var _isRecovering = false;
     var _lastRecoveryAttempt = 0;
@@ -350,6 +352,9 @@
         var audio = RadioAudio.get();
         if (!audio) return;
 
+        if (typeof window.ensureMediaSessionMetadata === 'function') {
+            window.ensureMediaSessionMetadata();
+        }
         window._hasUserStartedThisSession = true;
         window.userPaused = false;
         window._systemCallInterrupted = false;
@@ -767,6 +772,9 @@
             window._systemCallInterrupted = false;
             clearTimeout(_reconnectTimer);
             window.bindMasterMediaSessionHandlers();
+            if (typeof window.reassertMediaSessionMetadata === 'function') {
+                window.reassertMediaSessionMetadata(true);
+            }
             audioPersistenceManager.saveAudioState();
             window.setPlayerState(window.PLAYER_STATE.PLAYING);
         });
@@ -839,6 +847,47 @@
                 window.recoverLiveStream('ended');
             }
         });
+    }
+
+    function setupVideoInterruptionTracking() {
+        if (document._radioVideoInterruptionBound) return;
+        document._radioVideoInterruptionBound = true;
+
+        document.addEventListener('play', function(event) {
+            var video = event.target;
+            if (!video || video.tagName !== 'VIDEO') return;
+
+            var audio = RadioAudio.get();
+            _activeVideoCount++;
+            if (!audio || audio.paused || window.userPaused || !window._hasUserStartedThisSession) return;
+
+            window._videoInterruptionActive = true;
+            window._systemCallInterrupted = true;
+            window.userPaused = false;
+            savePlayingIntent(true);
+            audio._internalPauseCall = true;
+            audio.pause();
+            setTimeout(function() {
+                audio._internalPauseCall = false;
+            }, 250);
+            window.setPlayerState(window.PLAYER_STATE.PAUSED, "Paused for video");
+        }, true);
+
+        var resumeAfterVideo = function(event) {
+            var video = event.target;
+            if (!video || video.tagName !== 'VIDEO') return;
+
+            _activeVideoCount = Math.max(0, _activeVideoCount - 1);
+            if (_activeVideoCount > 0 || !window._videoInterruptionActive) return;
+
+            window._videoInterruptionActive = false;
+            if (window._hasUserStartedThisSession && !window.userPaused && !window.isAudioInterrupted()) {
+                startOrResumeStream(false);
+            }
+        };
+
+        document.addEventListener('pause', resumeAfterVideo, true);
+        document.addEventListener('ended', resumeAfterVideo, true);
     }
 
     window.addEventListener('online', function() {
@@ -923,6 +972,7 @@
         RadioAudio.get();
         window.bindMasterMediaSessionHandlers();
         setupAudioListeners();
+        setupVideoInterruptionTracking();
         window.setPlayerState(window.PLAYER_STATE.PAUSED, "Press Play To Listen");
         var stickyPlayer = document.getElementById('sticky-player');
         if (stickyPlayer) stickyPlayer.style.display = 'flex';
