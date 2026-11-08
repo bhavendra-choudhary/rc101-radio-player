@@ -714,7 +714,8 @@
             }
 
             // 2. Leaving Vehicle / Bluetooth disconnects while playing -> Pause immediately (never play on phone speaker)
-            if (!window.isAudioInterrupted() && deviceRemoved && isCurrentlyPlaying) {
+            if (!window.isAudioInterrupted() && deviceRemoved && window.isIntentStillValid() &&
+                !window.userPaused) {
                 clearTimeout(_btResumeTimer);
                 clearTimeout(_reconnectTimer);
                 window.userPaused = false;
@@ -755,6 +756,11 @@
                 handleBluetoothRouteChange('devicechange');
             });
         }
+        setInterval(function() {
+            if (window.isAudioInterrupted() && window.isIntentStillValid() && !window.userPaused) {
+                handleBluetoothRouteChange('bluetooth-poll');
+            }
+        }, 2000);
     }
 
     function setupAudioListeners() {
@@ -776,6 +782,11 @@
         liveAudio.addEventListener('pause', function() {
             audioPersistenceManager.saveAudioState();
             if (liveAudio._internalPauseCall) return;
+
+            if (window._hasUserStartedThisSession && !window.userPaused && !window._systemCallInterrupted &&
+                navigator.mediaDevices && typeof navigator.mediaDevices.enumerateDevices === 'function') {
+                handleBluetoothRouteChange('audio-pause');
+            }
 
             if (!window._hasUserStartedThisSession || window.userPaused || (Date.now() - window._lastMediaSessionPauseTime < 1500)) {
                 window.userPaused = true;
