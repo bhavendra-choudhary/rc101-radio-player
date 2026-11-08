@@ -468,26 +468,17 @@
             return;
         }
 
-        // RULE 6: Preload new song's photo in background BEFORE updating text so Photo + Title + Artist change together in 0.0s!
-        var candidateArt = isNonDefaultProvidedArtwork(providedArtwork)
+        // Commit title, artist and the notification immediately. Artwork lookup continues in the background.
+        var immediateArtUrl = isNonDefaultProvidedArtwork(providedArtwork)
             ? providedArtwork
-            : await resolveTrackArtworkFromItunes(cleanArtist, cleanTitle);
-
-        var readyArtUrl = await preloadImageWithTimeout(candidateArt, 2800);
-
-        if ((typeof navigator.onLine !== 'undefined' && !navigator.onLine) || window._networkIssueDetected) {
-            window.resetArtworkToStationLogo();
-            return;
-        }
-
+            : _defaultSrc;
         window._currentTrackKey = trackKey;
-        window._currentArtworkUrl = readyArtUrl;
+        window._currentArtworkUrl = immediateArtUrl;
         window._currentTitleText = cleanTitle;
         window._currentArtistText = cleanArtist || _appName;
         window._metadataReady = true;
 
-        // 1. Update Sticky Player Photo, Song Name, Singer Name & Browser Tab Title simultaneously
-        window.setStickyPlayerArtwork(readyArtUrl);
+        window.setStickyPlayerArtwork(immediateArtUrl);
         titleEl.textContent = window._currentTitleText;
         artistEl.textContent = window._currentArtistText;
         document.title = window._currentTitleText + ' - ' + window._currentArtistText + ' | ' + _appName;
@@ -497,13 +488,36 @@
             if (playText) playText.style.display = 'none';
         }
 
-        // 2. Commit to Client's Original MediaSession Notification System
         window._commitMediaSession({
             title: window._currentTitleText,
             artist: window._currentArtistText,
             album: getAlbumTitle(),
-            artwork: buildSongArtworkArray(readyArtUrl)
+            artwork: buildSongArtworkArray(immediateArtUrl)
         }, true);
+
+        var artworkPromise = isNonDefaultProvidedArtwork(providedArtwork)
+            ? Promise.resolve(providedArtwork)
+            : resolveTrackArtworkFromItunes(cleanArtist, cleanTitle);
+
+        artworkPromise.then(function(candidateArt) {
+            return preloadImageWithTimeout(candidateArt, 2800);
+        }).then(function(readyArtUrl) {
+            if (window._currentTrackKey !== trackKey || window._networkIssueDetected ||
+                (typeof navigator.onLine !== 'undefined' && !navigator.onLine)) {
+                return;
+            }
+
+            window._currentArtworkUrl = readyArtUrl;
+            window.setStickyPlayerArtwork(readyArtUrl);
+            window._commitMediaSession({
+                title: window._currentTitleText,
+                artist: window._currentArtistText,
+                album: getAlbumTitle(),
+                artwork: buildSongArtworkArray(readyArtUrl)
+            }, true);
+        }).catch(function() {
+            console.warn('Unable to resolve artwork for the current song; keeping the station artwork.');
+        });
     }
 
     window.updateSongInfo = function(info) {

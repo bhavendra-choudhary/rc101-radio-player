@@ -1288,6 +1288,26 @@
                 font-size: 0.85rem;
             }
 
+            .player-info > div:last-child {
+                min-width: 0;
+                flex: 1 1 auto;
+            }
+
+            .player-song {
+                white-space: normal;
+                overflow: visible;
+                text-overflow: clip;
+                overflow-wrap: anywhere;
+                word-break: break-word;
+            }
+
+            #current-title,
+            #current-artist {
+                white-space: normal;
+                overflow-wrap: anywhere;
+                word-break: break-word;
+            }
+
             .player-buttons {
                 gap: 8px;
             }
