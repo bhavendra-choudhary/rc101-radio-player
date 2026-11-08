@@ -153,24 +153,23 @@
         window._mediaMetadataTimer = setTimeout(_flushMediaSession, window._mediaMetadataDebounceMs);
     };
 
-    window.ensureMediaSessionMetadata = function () {
-        if (!('mediaSession' in navigator)) return;
-        var metadata = window._storedMediaMetadata || window._pendingMediaMetadata;
-        if (!metadata) {
-            metadata = {
-                title: window._currentTitleText || 'Live Stream',
-                artist: window._currentArtistText || _appName,
-                album: getAlbumTitle(),
-                artwork: buildSongArtworkArray(window._currentArtworkUrl || _defaultSrc)
-            };
-        }
-        window._commitMediaSession(metadata, true);
-    };
-
     window.reassertMediaSessionMetadata = function (force) {
         if (!('mediaSession' in navigator)) return;
         try {
-            window.ensureMediaSessionMetadata();
+            var meta = window._storedMediaMetadata || window._pendingMediaMetadata;
+            if (!meta && window._currentTitleText) {
+                meta = {
+                    title: window._currentTitleText,
+                    artist: window._currentArtistText || _appName,
+                    album: getAlbumTitle(),
+                    artwork: buildSongArtworkArray(window._currentArtworkUrl)
+                };
+            }
+            if (meta) {
+                window._commitMediaSession(meta, true);
+            } else {
+                _syncMediaSessionPlaybackState();
+            }
         } catch (e) {}
     };
 

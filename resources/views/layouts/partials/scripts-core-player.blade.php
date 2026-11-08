@@ -352,9 +352,6 @@
         var audio = RadioAudio.get();
         if (!audio) return;
 
-        if (typeof window.ensureMediaSessionMetadata === 'function') {
-            window.ensureMediaSessionMetadata();
-        }
         window._hasUserStartedThisSession = true;
         window.userPaused = false;
         window._systemCallInterrupted = false;
@@ -772,9 +769,6 @@
             window._systemCallInterrupted = false;
             clearTimeout(_reconnectTimer);
             window.bindMasterMediaSessionHandlers();
-            if (typeof window.reassertMediaSessionMetadata === 'function') {
-                window.reassertMediaSessionMetadata(true);
-            }
             audioPersistenceManager.saveAudioState();
             window.setPlayerState(window.PLAYER_STATE.PLAYING);
         });
