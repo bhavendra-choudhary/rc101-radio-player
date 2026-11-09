@@ -29,6 +29,7 @@
     window._currentArtistText = '';
     window._metadataReady = false;
     window._metadataInFlight = false;
+    window._metadataRevision = 0;
     window._adPollConfirmCount = 0;
     window._itunesCache = {};
 
@@ -472,6 +473,7 @@
         var immediateArtUrl = isNonDefaultProvidedArtwork(providedArtwork)
             ? providedArtwork
             : _defaultSrc;
+        var metadataRevision = ++window._metadataRevision;
         window._currentTrackKey = trackKey;
         window._currentArtworkUrl = immediateArtUrl;
         window._currentTitleText = cleanTitle;
@@ -502,7 +504,8 @@
         artworkPromise.then(function(candidateArt) {
             return preloadImageWithTimeout(candidateArt, 2800);
         }).then(function(readyArtUrl) {
-            if (window._currentTrackKey !== trackKey || window._networkIssueDetected ||
+            if (window._metadataRevision !== metadataRevision || window._currentTrackKey !== trackKey ||
+                window._networkIssueDetected ||
                 (typeof navigator.onLine !== 'undefined' && !navigator.onLine)) {
                 return;
             }
@@ -619,6 +622,7 @@
                 return;
             } catch (err) {}
         }
+        pollLiveMetadataOnce();
         setInterval(pollLiveMetadataOnce, 4000);
     }
 
@@ -638,8 +642,6 @@
         setupIOSAudio();
         window.setStickyPlayerArtwork(_defaultSrc);
 
-        // Immediately preload current song + photo + tab title on page open (even before Play is pressed!)
-        pollLiveMetadataOnce();
         startOffThreadMetadataWorker();
     });
 </script>
