@@ -56,7 +56,7 @@
     window._pendingMediaMetadata = null;
     window._storedMediaMetadata = null;
     window._mediaMetadataTimer = null;
-    window._mediaMetadataDebounceMs = 250;
+    window._mediaMetadataDebounceMs = 150;
 
     function buildSongArtworkArray(srcUrl) {
         if (!srcUrl || srcUrl === _defaultSrc || srcUrl === _defaultAbsoluteSrc) {
@@ -221,9 +221,9 @@
         window.setStickyPlayerArtwork(_defaultSrc);
     };
 
-    // Preload new song photo in browser memory FIRST so Photo + Song Name + Singer swap in 0.0 seconds together
+    // Preload new song photo in browser memory FIRST so Photo + Song Name + Singer swap in 0.0 seconds together!
     function preloadImageWithTimeout(url, timeoutMs) {
-        timeoutMs = timeoutMs || 2800;
+        timeoutMs = timeoutMs || 1800;
         return new Promise(function(resolve) {
             if (!url || url === _defaultSrc || url === _defaultAbsoluteSrc) {
                 resolve(_defaultSrc);
@@ -312,12 +312,22 @@
         return { artist: a, title: t };
     }
 
+    function fetchWithFastTimeout(url, timeoutMs) {
+        timeoutMs = timeoutMs || 1400;
+        if (typeof AbortController !== 'undefined') {
+            var ctrl = new AbortController();
+            var tid = setTimeout(function() { ctrl.abort(); }, timeoutMs);
+            return fetch(url, { signal: ctrl.signal }).finally(function() { clearTimeout(tid); });
+        }
+        return fetch(url);
+    }
+
     async function fetchItunesJson(query, entity) {
         entity = entity || 'song';
-        // 1. Direct Browser -> Apple iTunes API (Fastest 0.2s response)
+        // 1. Direct Browser -> Apple iTunes API with 1.4s fast timeout
         try {
-            var directUrl = 'https://itunes.apple.com/search?term=' + encodeURIComponent(query) + '&media=music&entity=' + entity + '&limit=10&country=US';
-            var res = await fetch(directUrl);
+            var directUrl = 'https://itunes.apple.com/search?term=' + encodeURIComponent(query) + '&media=music&entity=' + entity + '&limit=8&country=US';
+            var res = await fetchWithFastTimeout(directUrl, 1400);
             if (res.ok) {
                 var data = await res.json();
                 if (data && Array.isArray(data.results) && data.results.length > 0) return data;
@@ -327,7 +337,7 @@
         // 2. Fallback -> Server Proxy
         try {
             var proxyUrl = '/proxy/itunes-search?term=' + encodeURIComponent(query) + '&entity=' + encodeURIComponent(entity);
-            var res2 = await fetch(proxyUrl, { method: 'GET', cache: 'force-cache' });
+            var res2 = await fetchWithFastTimeout(proxyUrl, 1800);
             if (res2.ok) {
                 var data2 = await res2.json();
                 if (data2 && Array.isArray(data2.results) && data2.results.length > 0) return data2;
@@ -337,7 +347,7 @@
         return null;
     }
 
-    // 4-Layer iTunes Artwork Engine (Ensures 99.9% of songs get their real cover photo)
+    // 4-Layer iTunes Artwork Engine (Fast cached lookup)
     async function resolveTrackArtworkFromItunes(artist, title) {
         var cacheKey = (artist + '___' + title).toLowerCase();
         if (window._itunesCache[cacheKey]) {
@@ -383,7 +393,6 @@
             }
         }
 
-        // Layer 4: Artist Album Cover Fallback if song is a brand-new radio single
         if (primaryArtist && primaryArtist.length >= 2) {
             var artistData = await fetchItunesJson(primaryArtist, 'album');
             if (artistData && artistData.results && artistData.results.length > 0) {
@@ -408,7 +417,7 @@
         return true;
     }
 
-    // RULE 1, 2, 5, 6: Atomic 0.0-Second Song + Singer + Preloaded Photo + Browser Tab + Client MediaSession Commit
+    // ATOMIC 0.0-SECOND SYNC: Preloads the new song's photo in RAM first, then updates Photo + Song Name + Singer + Tab Title at the exact same millisecond!
     async function applyIncomingMetadata(rawArtist, rawTitle, providedArtwork) {
         var isOnline = (typeof navigator.onLine === 'undefined') ? true : navigator.onLine;
         var isReconnecting = window._currentPlayerState === (window.PLAYER_STATE && window.PLAYER_STATE.RECONNECTING) || window._networkIssueDetected;
@@ -464,23 +473,35 @@
         window._adPollConfirmCount = 0;
         var trackKey = (cleanArtist + '___' + cleanTitle).toLowerCase();
 
-        // Zero CPU work if the exact same song is still playing
+        // Zero work if exact same song is already displayed
         if (window._currentTrackKey === trackKey && window._metadataReady) {
             return;
         }
 
-        // Commit title, artist and the notification immediately. Artwork lookup continues in the background.
-        var immediateArtUrl = isNonDefaultProvidedArtwork(providedArtwork)
-            ? providedArtwork
-            : _defaultSrc;
         var metadataRevision = ++window._metadataRevision;
+
+        // Resolve & Preload the new song's photo in browser memory BEFORE updating text
+        // so that Artwork + Song Name + Singer Name all change together in 0.0 seconds with ZERO default logo flash!
+        var candidateArt = isNonDefaultProvidedArtwork(providedArtwork)
+            ? providedArtwork
+            : await resolveTrackArtworkFromItunes(cleanArtist, cleanTitle);
+
+        var readyArtUrl = await preloadImageWithTimeout(candidateArt, 1800);
+
+        if (window._metadataRevision !== metadataRevision ||
+            (typeof navigator.onLine !== 'undefined' && !navigator.onLine) ||
+            window._networkIssueDetected) {
+            return;
+        }
+
+        // ATOMIC 0.0s COMMIT: Swap Photo + Title + Artist + Browser Tab + MediaSession at the exact same instant!
         window._currentTrackKey = trackKey;
-        window._currentArtworkUrl = immediateArtUrl;
+        window._currentArtworkUrl = readyArtUrl;
         window._currentTitleText = cleanTitle;
         window._currentArtistText = cleanArtist || _appName;
         window._metadataReady = true;
 
-        window.setStickyPlayerArtwork(immediateArtUrl);
+        window.setStickyPlayerArtwork(readyArtUrl);
         titleEl.textContent = window._currentTitleText;
         artistEl.textContent = window._currentArtistText;
         document.title = window._currentTitleText + ' - ' + window._currentArtistText + ' | ' + _appName;
@@ -494,33 +515,8 @@
             title: window._currentTitleText,
             artist: window._currentArtistText,
             album: getAlbumTitle(),
-            artwork: buildSongArtworkArray(immediateArtUrl)
+            artwork: buildSongArtworkArray(readyArtUrl)
         }, true);
-
-        var artworkPromise = isNonDefaultProvidedArtwork(providedArtwork)
-            ? Promise.resolve(providedArtwork)
-            : resolveTrackArtworkFromItunes(cleanArtist, cleanTitle);
-
-        artworkPromise.then(function(candidateArt) {
-            return preloadImageWithTimeout(candidateArt, 2800);
-        }).then(function(readyArtUrl) {
-            if (window._metadataRevision !== metadataRevision || window._currentTrackKey !== trackKey ||
-                window._networkIssueDetected ||
-                (typeof navigator.onLine !== 'undefined' && !navigator.onLine)) {
-                return;
-            }
-
-            window._currentArtworkUrl = readyArtUrl;
-            window.setStickyPlayerArtwork(readyArtUrl);
-            window._commitMediaSession({
-                title: window._currentTitleText,
-                artist: window._currentArtistText,
-                album: getAlbumTitle(),
-                artwork: buildSongArtworkArray(readyArtUrl)
-            }, true);
-        }).catch(function() {
-            console.warn('Unable to resolve artwork for the current song; keeping the station artwork.');
-        });
     }
 
     window.updateSongInfo = function(info) {
@@ -566,8 +562,7 @@
         }
     }
 
-    // Off-Thread Web Worker Polling: Checks metadata on a separate thread every 3.5s
-    // so the main audio thread has 0.0ms lag when switching apps or locking screen, while updating new songs instantly!
+    // Off-Thread Web Worker Polling every 1.8s so song changes are caught almost immediately with 0 main-thread lag!
     function startOffThreadMetadataWorker() {
         if (typeof window.Worker !== 'undefined' && typeof window.Blob !== 'undefined') {
             try {
@@ -599,7 +594,7 @@
                     "    originUrl = e.data.origin;",
                     "    streamUrl = e.data.stream;",
                     "    checkMeta();",
-                    "    setInterval(checkMeta, 3500);",
+                    "    setInterval(checkMeta, 1800);",
                     "  } else if (e.data && e.data.cmd === 'force') {",
                     "    lastRawSig = '';",
                     "    checkMeta();",
@@ -622,8 +617,7 @@
                 return;
             } catch (err) {}
         }
-        pollLiveMetadataOnce();
-        setInterval(pollLiveMetadataOnce, 4000);
+        setInterval(pollLiveMetadataOnce, 2000);
     }
 
     window.triggerImmediateMetadataSync = function() {
@@ -642,6 +636,8 @@
         setupIOSAudio();
         window.setStickyPlayerArtwork(_defaultSrc);
 
+        // Immediately fetch on page load without waiting for Worker boot
+        pollLiveMetadataOnce();
         startOffThreadMetadataWorker();
     });
 </script>

@@ -334,7 +334,7 @@ Route::get('/api/stream-metadata', function () {
                     'is_fallback' => false
                 ];
 
-                cache()->put($cacheKey, $responseData, now()->addSeconds(5));
+                cache()->put($cacheKey, $responseData, now()->addSeconds(1));
 
                 return response()->json($responseData)->header('Access-Control-Allow-Origin', '*');
             }
@@ -344,7 +344,7 @@ Route::get('/api/stream-metadata', function () {
         }
     }
 
-    cache()->put($cacheKey, $fallbackResponse, now()->addSeconds(5));
+    cache()->put($cacheKey, $fallbackResponse, now()->addSeconds(1));
 
     return response()->json($fallbackResponse)->header('Access-Control-Allow-Origin', '*');
 })->name('public.api.stream.metadata');
@@ -508,7 +508,7 @@ Route::prefix('admin')->name('admin.')->group(function () {
                         'is_fallback' => false
                     ];
 
-                    cache()->put($cacheKey, $responseData, now()->addSeconds(5));
+                    cache()->put($cacheKey, $responseData, now()->addSeconds(1));
 
                     return response()->json($responseData)->header('Access-Control-Allow-Origin', '*');
                 }
@@ -518,7 +518,7 @@ Route::prefix('admin')->name('admin.')->group(function () {
             }
         }
 
-        cache()->put($cacheKey, $fallbackResponse, now()->addSeconds(5));
+        cache()->put($cacheKey, $fallbackResponse, now()->addSeconds(1));
 
         return response()->json($fallbackResponse)->header('Access-Control-Allow-Origin', '*');
     })->name('api.stream.metadata');

@@ -199,7 +199,7 @@
         if (stickyPlayer) stickyPlayer.style.display = 'flex';
         if (stickyArt) stickyArt.style.display = 'block';
 
-        var hasPreloadedSong = curTitleEl && curTitleEl.textContent && curTitleEl.textContent.trim() !== '' && curTitleEl.textContent.trim() !== 'Loading...';
+        var hasPreloadedSong = window._metadataReady || (curTitleEl && curTitleEl.textContent && curTitleEl.textContent.trim() !== '' && curTitleEl.textContent.trim() !== 'Loading...');
 
         if (newState === window.PLAYER_STATE.PLAYING) {
             if (navbarPlayIcon) navbarPlayIcon.className = "fas fa-pause me-1";
@@ -378,7 +378,7 @@
                 audioPersistenceManager.saveAudioState();
                 window.setPlayerState(window.PLAYER_STATE.PLAYING);
                 window.hideReconnectingDialogue();
-                if (typeof window.triggerImmediateMetadataSync === 'function') {
+                if (!window._metadataReady && typeof window.triggerImmediateMetadataSync === 'function') {
                     window.triggerImmediateMetadataSync();
                 }
             }).catch(function(error) {
@@ -714,8 +714,7 @@
             }
 
             // 2. Leaving Vehicle / Bluetooth disconnects while playing -> Pause immediately (never play on phone speaker)
-            if (!window.isAudioInterrupted() && deviceRemoved && window.isIntentStillValid() &&
-                !window.userPaused) {
+            if (!window.isAudioInterrupted() && deviceRemoved && window.isIntentStillValid() && !window.userPaused) {
                 clearTimeout(_btResumeTimer);
                 clearTimeout(_reconnectTimer);
                 window.userPaused = false;
@@ -971,6 +970,17 @@
     });
 
     document.addEventListener('DOMContentLoaded', function() {
+        // Guard against HTMX page navigation re-firing DOMContentLoaded and resetting the playing radio!
+        if (window._corePlayerInitialized) {
+            var sticky = document.getElementById('sticky-player');
+            if (sticky) sticky.style.display = 'flex';
+            if (window.isRealAudioPlaying()) {
+                window.setPlayerState(window.PLAYER_STATE.PLAYING);
+            }
+            return;
+        }
+        window._corePlayerInitialized = true;
+
         savePlayingIntent(false);
         window.setAudioInterrupted(false);
         window.hideReconnectingDialogue();
